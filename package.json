@@ -1,0 +1,17 @@
+{
+	"name": "codex-hub",
+	"private": true,
+	"version": "0.1.0",
+	"workspaces": [
+		"apps/*"
+	],
+	"scripts": {
+		"dev": "concurrently -n gateway,web -c blue,green \"bun run --cwd apps/gateway dev\" \"bun run --cwd apps/web dev -- --host 0.0.0.0\"",
+		"build": "bun run --cwd apps/gateway build && bun run --cwd apps/web build",
+		"check": "bun run --cwd apps/gateway check && bun run --cwd apps/web check",
+		"start": "concurrently -n gateway,web -c blue,green \"bun run --cwd apps/gateway start\" \"bun run --cwd apps/web start\""
+	},
+	"devDependencies": {
+		"concurrently": "^9.2.1"
+	}
+}

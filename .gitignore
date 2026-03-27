@@ -1,0 +1,9 @@
+node_modules
+apps/*/node_modules
+apps/*/.svelte-kit
+apps/*/build
+apps/*/dist
+.env
+.env.*
+!.env.example
+tmp

@@ -1,0 +1,120 @@
+export type ApprovalPolicy = 'untrusted' | 'on-failure' | 'on-request' | 'never';
+export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access';
+
+export interface JsonRpcErrorPayload {
+	code: number;
+	message: string;
+	data?: unknown;
+}
+
+export interface JsonRpcRequest {
+	id?: number;
+	method: string;
+	params?: unknown;
+}
+
+export interface JsonRpcResponse<T = unknown> {
+	id: number;
+	result?: T;
+	error?: JsonRpcErrorPayload;
+}
+
+export interface AppServerNotification {
+	method: string;
+	params?: Record<string, unknown>;
+}
+
+export interface GatewayStatus {
+	state: 'starting' | 'ready' | 'error';
+	codexBin: string;
+	defaultCwd: string;
+	projectsRoot: string;
+	defaultApprovalPolicy: ApprovalPolicy;
+	defaultSandboxMode: SandboxMode;
+	autoApproveServerRequests: boolean;
+	warnings: string[];
+	recentStderr: string[];
+	lastError: string | null;
+	startedAt: string | null;
+}
+
+export interface GatewayConfig {
+	port: number;
+	host: string;
+	codexBin: string;
+	defaultCwd: string;
+	projectsRoot: string;
+	defaultApprovalPolicy: ApprovalPolicy;
+	defaultSandboxMode: SandboxMode;
+	autoApproveServerRequests: boolean;
+}
+
+export interface ProjectSummary {
+	name: string;
+	path: string;
+	threadCount: number;
+	updatedAt: number;
+}
+
+export interface ProjectListResponse {
+	root: string;
+	data: ProjectSummary[];
+}
+
+export interface CodexThreadItem {
+	type: string;
+	id: string;
+	[key: string]: unknown;
+}
+
+export interface CodexTurn {
+	id: string;
+	status: string;
+	error: { message?: string } | null;
+	items: CodexThreadItem[];
+}
+
+export interface CodexThread {
+	id: string;
+	preview: string;
+	ephemeral: boolean;
+	modelProvider: string;
+	createdAt: number;
+	updatedAt: number;
+	status: string;
+	path: string | null;
+	cwd: string;
+	cliVersion: string;
+	source: string;
+	agentNickname: string | null;
+	agentRole: string | null;
+	gitInfo: Record<string, unknown> | null;
+	name: string | null;
+	turns: CodexTurn[];
+}
+
+export interface CodexThreadListResponse {
+	data: CodexThread[];
+	nextCursor: string | null;
+}
+
+export interface DirectoryEntry {
+	fileName: string;
+	isDirectory: boolean;
+	isFile: boolean;
+}
+
+export interface DirectoryListingResponse {
+	kind: 'directory';
+	path: string;
+	entries: Array<DirectoryEntry & { path: string }>;
+}
+
+export interface FileContentsResponse {
+	kind: 'file';
+	path: string;
+	text: string | null;
+	isBinary: boolean;
+	byteLength: number;
+	modifiedAtMs: number;
+}

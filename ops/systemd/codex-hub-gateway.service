@@ -1,0 +1,15 @@
+[Unit]
+Description=Codex Hub Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/Dev/codex-hub/apps/gateway
+EnvironmentFile=-%h/Dev/codex-hub/apps/gateway/.env
+ExecStart=%h/.bun/bin/bun run start
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
