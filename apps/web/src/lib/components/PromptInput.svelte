@@ -1,25 +1,33 @@
 <script lang="ts">
-	import { ArrowUpIcon, SpinnerGapIcon } from 'phosphor-svelte';
+	import { ArrowUpIcon, SpinnerGapIcon, StopIcon } from 'phosphor-svelte';
 
 	let {
 		placeholder = 'message',
 		onsubmit,
+		oninterrupt,
 		disabled = false,
 		isStreaming = false,
+		canInterrupt = false,
+		isInterrupting = false,
 		value = $bindable('')
 	}: {
 		placeholder?: string;
 		onsubmit?: (value: string) => void | Promise<void>;
+		oninterrupt?: () => void | Promise<void>;
 		disabled?: boolean;
 		isStreaming?: boolean;
+		canInterrupt?: boolean;
+		isInterrupting?: boolean;
 		value?: string;
 	} = $props();
 
 	let textareaRef = $state<HTMLTextAreaElement | null>(null);
 	let isSubmitting = $state(false);
 
-	const isLoading = $derived(isSubmitting || isStreaming);
-	const isDisabled = $derived(disabled || isLoading);
+	const isSending = $derived(isSubmitting);
+	const textareaDisabled = $derived(disabled || isStreaming || isSubmitting || isInterrupting);
+	const sendDisabled = $derived(disabled || isStreaming || isSubmitting || isInterrupting || !value.trim());
+	const stopDisabled = $derived(disabled || isInterrupting || !canInterrupt);
 
 	function focusTextarea(): void {
 		textareaRef?.focus();
@@ -40,7 +48,7 @@
 	});
 
 	async function handleSubmit(): Promise<void> {
-		if (!value.trim() || isDisabled) {
+		if (!value.trim() || sendDisabled) {
 			return;
 		}
 
@@ -59,8 +67,16 @@
 		}
 	}
 
+	async function handleInterrupt(): Promise<void> {
+		if (stopDisabled) {
+			return;
+		}
+
+		await oninterrupt?.();
+	}
+
 	function handleKeydown(event: KeyboardEvent): void {
-		if (event.key === 'Enter' && !event.shiftKey) {
+		if (event.key === 'Enter' && !event.shiftKey && !isStreaming) {
 			event.preventDefault();
 			void handleSubmit();
 		}
@@ -73,7 +89,7 @@
 	onclick={focusTextarea}
 	onkeydown={(event) => event.key === 'Enter' && focusTextarea()}
 	class="relative w-full cursor-text border border-line bg-surface-1 transition-[background-color] duration-150 focus-within:bg-surface-1"
-	class:opacity-50={isDisabled}
+	class:opacity-50={disabled && !isStreaming}
 >
 	<textarea
 		bind:this={textareaRef}
@@ -82,18 +98,24 @@
 		onkeydown={handleKeydown}
 		{placeholder}
 		rows={1}
-		disabled={isDisabled}
+		disabled={textareaDisabled}
 		class="min-h-[96px] max-h-48 w-full resize-none overflow-y-auto bg-transparent px-4 pt-4 pb-12 text-[16px] leading-relaxed text-fg outline-none placeholder:text-muted disabled:cursor-not-allowed min-[821px]:text-[14px]"
 	></textarea>
 
 	<button
 		type="button"
-		aria-label="Send message"
-		onclick={() => void handleSubmit()}
-		disabled={!value.trim() || isDisabled}
+		aria-label={isStreaming ? (isInterrupting ? 'Stopping agent' : 'Stop agent') : 'Send message'}
+		onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
+		disabled={isStreaming ? stopDisabled : sendDisabled}
 		class="absolute right-2 bottom-2 inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-0 text-fg transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
 	>
-		{#if isLoading}
+		{#if isStreaming}
+			{#if isInterrupting}
+				<SpinnerGapIcon size={16} class="animate-spin" />
+			{:else}
+				<StopIcon size={16} />
+			{/if}
+		{:else if isSending}
 			<SpinnerGapIcon size={16} class="animate-spin" />
 		{:else}
 			<ArrowUpIcon size={16} />

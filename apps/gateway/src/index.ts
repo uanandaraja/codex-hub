@@ -173,6 +173,23 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			return sendJson(response, 202, result);
 		}
 
+		const threadInterruptMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/interrupt$/);
+		if (method === 'POST' && threadInterruptMatch) {
+			await bridge.ensureReady();
+			const body = await readJsonBody(request);
+			const turnId = readOptionalString(body.turnId);
+			if (!turnId) {
+				return sendJson(response, 400, { error: { message: 'turnId is required' } });
+			}
+
+			const threadId = decodeURIComponent(threadInterruptMatch[1]);
+			const result = await bridge.request<Record<string, unknown>>('turn/interrupt', {
+				threadId,
+				turnId
+			});
+			return sendJson(response, 200, result);
+		}
+
 		const threadNameMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/name$/);
 		if (method === 'POST' && threadNameMatch) {
 			await bridge.ensureReady();

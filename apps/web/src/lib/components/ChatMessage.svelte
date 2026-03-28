@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { SpinnerGapIcon, StopIcon } from 'phosphor-svelte';
 	import { Streamdown } from 'svelte-streamdown';
 	import Code from 'svelte-streamdown/code';
 	import { shikiLanguages, shikiTheme, shikiThemes, streamdownTheme } from '$lib/streamdown/config';
@@ -6,14 +7,42 @@
 	let {
 		role,
 		content,
-		streaming = false
+		streaming = false,
+		interrupted = false,
+		elapsedSeconds = null,
+		showStatusNote = false
 	}: {
 		role: 'user' | 'assistant';
 		content: string;
 		streaming?: boolean;
+		interrupted?: boolean;
+		elapsedSeconds?: number | null;
+		showStatusNote?: boolean;
 	} = $props();
 
 	const isUser = $derived(role === 'user');
+	const assistantStatusText = $derived.by(() => {
+		if (!showStatusNote || isUser) {
+			return null;
+		}
+
+		if (streaming) {
+			return `Working... (${formatElapsed(elapsedSeconds)})`;
+		}
+
+		if (interrupted) {
+			return elapsedSeconds === null
+				? 'Interrupted'
+				: `Interrupted after ${formatElapsed(elapsedSeconds)}`;
+		}
+
+		return null;
+	});
+
+	function formatElapsed(value: number | null): string {
+		const seconds = Math.max(0, value ?? 0);
+		return `${seconds} sec${seconds === 1 ? '' : 's'}`;
+	}
 </script>
 
 {#if isUser}
@@ -38,9 +67,14 @@
 			</div>
 		{/if}
 
-		{#if streaming}
-			<div class="mt-3 flex h-4 items-end">
-				<span class="h-4 w-[0.18rem] animate-pulse bg-accent"></span>
+		{#if assistantStatusText}
+			<div class="mt-3 flex items-center gap-2 font-mono text-[12px] leading-[1.55] text-muted">
+				{#if streaming}
+					<SpinnerGapIcon size={14} class="animate-spin text-accent" />
+				{:else if interrupted}
+					<StopIcon size={14} class="text-notice" />
+				{/if}
+				<span>{assistantStatusText}</span>
 			</div>
 		{/if}
 	</article>

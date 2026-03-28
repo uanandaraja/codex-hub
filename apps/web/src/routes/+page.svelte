@@ -16,6 +16,13 @@
 		ThreadStartResponse
 	} from '$lib/types';
 
+	type RenderedConversationEntry = {
+		item: CodexThreadItem;
+		turnId: string;
+		turnStatus: string;
+		showStatusNote: boolean;
+	};
+
 	let { data } = $props<{ data: PageData }>();
 
 	const initialStatus = untrack(() => data.status);
@@ -41,6 +48,10 @@
 	let banner = $state<string | null>(initialBanner);
 	let composer = $state('');
 	let activeTurnId = $state<string | null>(null);
+	let activeTurnStartedAt = $state<number | null>(null);
+	let interruptingTurn = $state(false);
+	let streamTickMs = $state(Date.now());
+	let turnElapsedSeconds = $state<Record<string, number>>({});
 	let conversationBody = $state<HTMLElement | null>(null);
 	let sidebarOpen = $state(false);
 	let isDesktopViewport = false;
@@ -67,15 +78,47 @@
 			return null;
 		}
 
-		return threadDetails[selectedThreadId] ?? threads.find((thread) => thread.id === selectedThreadId) ?? null;
+		return threadDetails[selectedThreadId] ?? null;
 	});
+	const selectedThreadSummary = $derived.by<CodexThread | null>(() => {
+		if (!selectedThreadId) {
+			return null;
+		}
 
-	const conversationItems = $derived.by<CodexThreadItem[]>(() =>
-		currentThread ? currentThread.turns.flatMap((turn) => turn.items) : []
+		return threads.find((thread) => thread.id === selectedThreadId) ?? null;
+	});
+	const selectedThreadLabel = $derived.by(() =>
+		selectedThreadSummary ? chatLabel(selectedThreadSummary) : 'loading chat'
+	);
+	const isOpeningThread = $derived.by(
+		() => selectedThreadId !== null && selectedThreadSummary !== null && currentThread === null
 	);
 
-	const renderedConversationItems = $derived.by<CodexThreadItem[]>(() =>
-		conversationItems.filter((item) => shouldRenderConversationItem(item))
+	const renderedConversationEntries = $derived.by<RenderedConversationEntry[]>(() =>
+		currentThread
+			? currentThread.turns.flatMap((turn) => {
+					const lastAgentIndex = findLastAgentMessageIndex(turn.items);
+					return turn.items
+						.map((item, index) =>
+							shouldRenderConversationItem(item)
+								? {
+										item,
+										turnId: turn.id,
+										turnStatus: turn.status,
+										showStatusNote:
+											index === lastAgentIndex && isAgentMessageRenderItem(item)
+									}
+								: null
+						)
+						.filter((entry): entry is RenderedConversationEntry => entry !== null);
+				})
+			: []
+	);
+	const activeTurnElapsedSeconds = $derived.by(() =>
+		activeTurnStartedAt === null ? 0 : elapsedSecondsFrom(activeTurnStartedAt, streamTickMs)
+	);
+	const canInterruptActiveTurn = $derived(
+		selectedThreadId !== null && activeTurnId !== null && activeTurnId !== 'pending' && !interruptingTurn
 	);
 
 	$effect(() => {
@@ -125,8 +168,23 @@
 	});
 
 	$effect(() => {
-		void renderedConversationItems;
+		void renderedConversationEntries;
 		void scrollConversationToBottom();
+	});
+
+	$effect(() => {
+		if (!activeTurnId || activeTurnStartedAt === null) {
+			return;
+		}
+
+		streamTickMs = Date.now();
+		const interval = window.setInterval(() => {
+			streamTickMs = Date.now();
+		}, 1_000);
+
+		return () => {
+			window.clearInterval(interval);
+		};
 	});
 
 	$effect(() => {
@@ -200,6 +258,8 @@
 	async function ensureThreadReady(threadId: string): Promise<void> {
 		if (threadId !== selectedThreadId) {
 			activeTurnId = null;
+			activeTurnStartedAt = null;
+			interruptingTurn = false;
 		}
 
 		selectedThreadId = threadId;
@@ -223,7 +283,10 @@
 		const result = await api<ThreadReadResponse>(
 			`/api/threads/${encodeURIComponent(threadId)}?includeTurns=true`
 		);
-		threadDetails[threadId] = result.thread;
+		threadDetails = {
+			...threadDetails,
+			[threadId]: result.thread
+		};
 	}
 
 	async function loadProjectThreads(
@@ -298,7 +361,10 @@
 			});
 
 			threads = sortThreads([result.thread, ...threads.filter((thread) => thread.id !== result.thread.id)]);
-			threadDetails[result.thread.id] = result.thread;
+			threadDetails = {
+				...threadDetails,
+				[result.thread.id]: result.thread
+			};
 			selectedProjectPath = projectPath;
 			selectedThreadId = result.thread.id;
 			projects = insertProjectSummary(projects, projectPath, result.thread);
@@ -341,6 +407,8 @@
 
 	async function sendTurn(threadId: string, message: string): Promise<void> {
 		activeTurnId = 'pending';
+		activeTurnStartedAt = Date.now();
+		interruptingTurn = false;
 		const knownThread = threadDetails[threadId] ?? null;
 		const generatedName = shouldAutoNameThread(knownThread) ? generateThreadName(message) : null;
 		const optimisticState = applyOptimisticUserTurn(threadId, message);
@@ -363,7 +431,42 @@
 			restoreOptimisticUserTurn(threadId, optimisticState);
 			composer = message;
 			activeTurnId = null;
+			activeTurnStartedAt = null;
+			interruptingTurn = false;
 			banner = error instanceof Error ? error.message : 'Failed to send message.';
+		}
+	}
+
+	async function interruptActiveTurn(): Promise<void> {
+		if (!selectedThreadId || !activeTurnId || activeTurnId === 'pending' || interruptingTurn) {
+			return;
+		}
+
+		interruptingTurn = true;
+		const turnId = activeTurnId;
+		const elapsedSeconds = activeTurnStartedAt === null ? null : activeTurnElapsedSeconds;
+
+		try {
+			await api(`/api/threads/${encodeURIComponent(selectedThreadId)}/interrupt`, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json'
+				},
+				body: JSON.stringify({ turnId })
+			});
+
+			if (elapsedSeconds !== null) {
+				turnElapsedSeconds = {
+					...turnElapsedSeconds,
+					[turnId]: elapsedSeconds
+				};
+			}
+
+			markTurnInterrupted(selectedThreadId, turnId);
+			banner = null;
+		} catch (error) {
+			interruptingTurn = false;
+			banner = error instanceof Error ? error.message : 'Failed to interrupt turn.';
 		}
 	}
 
@@ -388,7 +491,14 @@
 		}
 
 		if (notification.method === 'turn/started') {
-			activeTurnId = readTurnId(notification.params) ?? 'pending';
+			const turnId = readTurnId(notification.params) ?? 'pending';
+			activeTurnId = turnId;
+			if (activeTurnStartedAt === null) {
+				activeTurnStartedAt = Date.now();
+			}
+			if (turnId !== 'pending') {
+				updateTurnStatus(threadId, turnId, readTurnStatus(notification.params) ?? 'inProgress');
+			}
 			return;
 		}
 
@@ -413,18 +523,45 @@
 		}
 
 		if (notification.method === 'turn/completed') {
+			const turnId = readTurnId(notification.params);
+			const turnStatus = readTurnStatus(notification.params);
+			if (turnId && turnStatus) {
+				updateTurnStatus(threadId, turnId, turnStatus);
+				if (turnStatus === 'interrupted' && activeTurnStartedAt !== null) {
+					turnElapsedSeconds = {
+						...turnElapsedSeconds,
+						[turnId]: activeTurnElapsedSeconds
+					};
+				}
+			}
 			void finalizeTurn(threadId);
 			return;
 		}
 	}
 
 	async function finalizeTurn(threadId: string): Promise<void> {
+		const finalTurnId = activeTurnId;
+		const finalStartedAt = activeTurnStartedAt;
+
 		try {
 			await Promise.all([fetchThread(threadId), refreshThreads()]);
 		} catch (error) {
 			banner = error instanceof Error ? error.message : 'Failed to finalize chat.';
 		} finally {
+			if (
+				finalTurnId &&
+				finalTurnId !== 'pending' &&
+				finalStartedAt !== null &&
+				!(finalTurnId in turnElapsedSeconds)
+			) {
+				turnElapsedSeconds = {
+					...turnElapsedSeconds,
+					[finalTurnId]: elapsedSecondsFrom(finalStartedAt)
+				};
+			}
 			activeTurnId = null;
+			activeTurnStartedAt = null;
+			interruptingTurn = false;
 		}
 	}
 
@@ -488,6 +625,15 @@
 		}
 
 		return readString(turn.id);
+	}
+
+	function readTurnStatus(params?: Record<string, unknown>): string | null {
+		const turn = params?.turn;
+		if (!turn || typeof turn !== 'object' || !('status' in turn)) {
+			return null;
+		}
+
+		return readString(turn.status);
 	}
 
 	function readTurnItem(params?: Record<string, unknown>): CodexThreadItem | null {
@@ -869,6 +1015,100 @@
 		return thread.turns.length - 1;
 	}
 
+	function updateTurnStatus(threadId: string, turnId: string, status: string): void {
+		const thread = threadDetails[threadId];
+		if (!thread) {
+			return;
+		}
+
+		const turnIndex = (() => {
+			const exactIndex = thread.turns.findIndex((turn) => turn.id === turnId);
+			if (exactIndex >= 0) {
+				return exactIndex;
+			}
+
+			return findStreamingTurnIndex(thread, turnId);
+		})();
+		if (turnIndex < 0) {
+			return;
+		}
+
+		const turns = [...thread.turns];
+		turns[turnIndex] = {
+			...turns[turnIndex],
+			id: turnId,
+			status
+		};
+
+		threadDetails = {
+			...threadDetails,
+			[threadId]: {
+				...thread,
+				turns
+			}
+		};
+	}
+
+	function markTurnInterrupted(threadId: string, turnId: string): void {
+		updateTurnStatus(threadId, turnId, 'interrupted');
+	}
+
+	function findLastAgentMessageIndex(items: CodexThreadItem[]): number {
+		for (let index = items.length - 1; index >= 0; index -= 1) {
+			if (isAgentMessageRenderItem(items[index]) && shouldRenderConversationItem(items[index])) {
+				return index;
+			}
+		}
+
+		return -1;
+	}
+
+	function normalizeTurnStatus(status: string): string {
+		return status.toLowerCase().replace(/[_\s-]/g, '');
+	}
+
+	function isInterruptedTurnStatus(status: string): boolean {
+		return normalizeTurnStatus(status) === 'interrupted';
+	}
+
+	function isInProgressTurnStatus(status: string): boolean {
+		return normalizeTurnStatus(status) === 'inprogress';
+	}
+
+	function elapsedSecondsFrom(startedAt: number, now = Date.now()): number {
+		return Math.max(0, Math.floor((now - startedAt) / 1_000));
+	}
+
+	function entryElapsedSeconds(entry: RenderedConversationEntry): number | null {
+		if (entry.turnId in turnElapsedSeconds) {
+			return turnElapsedSeconds[entry.turnId] ?? null;
+		}
+
+		if (
+			activeTurnStartedAt !== null &&
+			entry.showStatusNote &&
+			isInProgressTurnStatus(entry.turnStatus)
+		) {
+			return activeTurnElapsedSeconds;
+		}
+
+		return null;
+	}
+
+	function entryIsStreaming(entry: RenderedConversationEntry): boolean {
+		return (
+			entry.showStatusNote &&
+			activeTurnStartedAt !== null &&
+			isInProgressTurnStatus(entry.turnStatus) &&
+			isAgentMessageRenderItem(entry.item) &&
+			entry.item.phase === 'streaming'
+		);
+	}
+
+	function entryIsInterrupted(entry: RenderedConversationEntry): boolean {
+		return entry.showStatusNote && isInterruptedTurnStatus(entry.turnStatus);
+	}
+
 	function findStreamingItemReplacementIndex(items: CodexThreadItem[], item: CodexThreadItem): number {
 		if (item.type === 'userMessage') {
 			return items.findIndex((entry) => entry.type === 'userMessage');
@@ -1174,32 +1414,44 @@
 						<strong>{currentProject?.name ?? 'project'}</strong>
 						<span>Start a chat for this repo.</span>
 					</div>
+				{:else if isOpeningThread}
+					<div class="mb-4 grid w-full gap-[0.35rem] border border-line bg-surface-1 p-[1.15rem] text-muted">
+						<strong class="truncate text-fg">{selectedThreadLabel}</strong>
+						<span>loading chat...</span>
+					</div>
 				{:else}
-					{#each renderedConversationItems as item (item.id)}
-						{#if item.type === 'userMessage'}
-							<ChatMessage role="user" content={renderUserText(item)} />
-						{:else if isAgentMessageRenderItem(item)}
+					{#each renderedConversationEntries as entry (entry.item.id)}
+						{#if entry.item.type === 'userMessage'}
+							<ChatMessage role="user" content={renderUserText(entry.item)} />
+						{:else if isAgentMessageRenderItem(entry.item)}
 							<ChatMessage
 								role="assistant"
-								content={item.text}
-								streaming={activeTurnId !== null && item.phase === 'streaming'}
+								content={entry.item.text}
+								streaming={entryIsStreaming(entry)}
+								interrupted={entryIsInterrupted(entry)}
+								elapsedSeconds={entryElapsedSeconds(entry)}
+								showStatusNote={entry.showStatusNote}
 							/>
-						{:else if isCommandExecutionItem(item) || isFileChangeItem(item)}
-							<ToolActivity item={item} projectsRoot={status?.projectsRoot ?? ''} />
+						{:else if isCommandExecutionItem(entry.item) || isFileChangeItem(entry.item)}
+							<ToolActivity item={entry.item} projectsRoot={status?.projectsRoot ?? ''} />
 						{/if}
 					{/each}
 				{/if}
 			</div>
 		</section>
 
-		<footer class="relative z-[1] border-t border-line bg-[linear-gradient(180deg,rgba(13,14,18,0),rgba(13,14,18,0.94)_18%)] px-[1.1rem] pt-[0.9rem] pb-4">
-			<div class="mx-auto w-full max-w-[680px]">
+		<footer class="relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4">
+			<div class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(9,10,12,0),rgba(9,10,12,0.56)_42%,rgba(9,10,12,0.92)_100%)] backdrop-blur-[10px]"></div>
+			<div class="relative mx-auto w-full max-w-[680px]">
 				<PromptInput
 					bind:value={composer}
 					placeholder="enter your message"
 					disabled={!selectedProjectPath}
 					isStreaming={activeTurnId !== null}
+					canInterrupt={canInterruptActiveTurn}
+					isInterrupting={interruptingTurn}
 					onsubmit={sendMessage}
+					oninterrupt={interruptActiveTurn}
 				/>
 			</div>
 		</footer>
