@@ -29,6 +29,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	let threadsError: string | null = null;
 	let initialThreadId: string | null = null;
 	let initialThread: CodexThread | null = null;
+	let initialThreadUsage: ThreadReadResponse['usage']['turns'] = {};
 	let pendingRequests: PendingServerRequestListResponse['data'] = [];
 
 	if (initialProjectPath) {
@@ -51,11 +52,11 @@ export const load: PageServerLoad = async ({ url }) => {
 
 	if (initialThreadId) {
 		try {
-			initialThread = (
-				await gatewayJson<ThreadReadResponse>(
-					`/v1/threads/${encodeURIComponent(initialThreadId)}?includeTurns=true`
-				)
-			).thread;
+			const threadResult = await gatewayJson<ThreadReadResponse>(
+				`/v1/threads/${encodeURIComponent(initialThreadId)}?includeTurns=true`
+			);
+			initialThread = threadResult.thread;
+			initialThreadUsage = threadResult.usage.turns;
 		} catch {
 			// Keep the page usable even if the thread read fails.
 		}
@@ -77,6 +78,7 @@ export const load: PageServerLoad = async ({ url }) => {
 		models: modelsResult.status === 'fulfilled' ? modelsResult.value.data : [],
 		threads,
 		initialThread,
+		initialThreadUsage,
 		initialPendingRequests: pendingRequests,
 		initialProjectPath,
 		initialThreadId,

@@ -18,17 +18,22 @@
 	let {
 		request,
 		resolving = false,
+		inline = false,
 		onresolve
 	}: {
 		request: PendingServerRequest;
 		resolving?: boolean;
+		inline?: boolean;
 		onresolve?: (payload: unknown) => void | Promise<void>;
 	} = $props();
 
 	let draftAnswers = $state<Record<string, string>>({});
 
-	const panelClass =
-		'border border-line bg-surface-1 p-[0.95rem] text-[13px] text-fg';
+	const panelClass = $derived.by(() =>
+		inline
+			? 'border border-line bg-[rgba(15,17,21,0.8)] p-[0.95rem] text-[13px] text-fg'
+			: 'border border-line bg-surface-1 p-[0.95rem] text-[13px] text-fg'
+	);
 	const actionButtonClass =
 		'inline-flex h-9 items-center justify-center border border-line px-3 text-[12px] font-medium text-fg transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-45';
 
@@ -305,5 +310,9 @@
 				{/if}
 			</button>
 		</div>
+
+		{#if resolving}
+			<p class="mt-3 font-mono text-[12px] text-muted">waiting for assistant to continue...</p>
+		{/if}
 	{/if}
 </section>

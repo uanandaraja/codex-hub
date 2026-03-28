@@ -127,6 +127,21 @@ export interface CodexThreadListResponse {
 	nextCursor: string | null;
 }
 
+export interface TurnContextUsage {
+	lastTokenUsageTotalTokens: number | null;
+	modelContextWindow: number | null;
+	contextLeftPercent: number | null;
+}
+
+export interface ThreadUsageResponse {
+	turns: Record<string, TurnContextUsage>;
+}
+
+export interface ThreadReadResponse {
+	thread: CodexThread;
+	usage: ThreadUsageResponse;
+}
+
 export interface DirectoryEntry {
 	fileName: string;
 	isDirectory: boolean;

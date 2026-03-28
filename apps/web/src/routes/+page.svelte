@@ -17,7 +17,8 @@
 		ProjectSummary,
 		RpcNotification,
 		ThreadReadResponse,
-		ThreadStartResponse
+		ThreadStartResponse,
+		ThreadUsageResponse
 	} from '$lib/types';
 
 	type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
@@ -46,6 +47,7 @@
 	const initialProjectPath = untrack(() => data.initialProjectPath ?? initialProjects[0]?.path ?? null);
 	const initialThreadId = untrack(() => data.initialThreadId ?? resolveInitialThreadId(initialThreads));
 	const initialDetailedThread = untrack(() => data.initialThread ?? null);
+	const initialThreadUsage = untrack(() => data.initialThreadUsage ?? {});
 	const initialPendingRequests = untrack(() => data.initialPendingRequests ?? []);
 
 	let status = $state<GatewayStatus | null>(initialStatus);
@@ -54,6 +56,9 @@
 	let threads = $state<CodexThread[]>(initialThreads);
 	let threadDetails = $state<Record<string, CodexThread>>(
 		initialDetailedThread ? { [initialDetailedThread.id]: initialDetailedThread } : {}
+	);
+	let threadUsageByThread = $state<Record<string, ThreadReadResponse['usage']['turns']>>(
+		initialThreadId ? { [initialThreadId]: initialThreadUsage } : {}
 	);
 	let pendingRequestsByThread = $state<Record<string, PendingServerRequest[]>>(
 		initialThreadId ? { [initialThreadId]: initialPendingRequests } : {}
@@ -132,6 +137,15 @@
 	);
 	const activePendingRequests = $derived.by<PendingServerRequest[]>(() =>
 		selectedThreadId ? (pendingRequestsByThread[selectedThreadId] ?? []) : []
+	);
+	const activeQuestionRequests = $derived.by<PendingServerRequest[]>(() =>
+		activePendingRequests.filter((request) => request.method === 'item/tool/requestUserInput')
+	);
+	const activeFooterRequests = $derived.by<PendingServerRequest[]>(() =>
+		activePendingRequests.filter((request) => request.method !== 'item/tool/requestUserInput')
+	);
+	const currentThreadUsage = $derived.by<ThreadReadResponse['usage']['turns']>(() =>
+		selectedThreadId ? (threadUsageByThread[selectedThreadId] ?? {}) : {}
 	);
 
 	const renderedConversationEntries = $derived.by<RenderedConversationEntry[]>(() =>
@@ -272,6 +286,7 @@
 
 	$effect(() => {
 		void renderedConversationEntries;
+		void activeQuestionRequests;
 		void scrollConversationToBottom();
 	});
 
@@ -284,6 +299,22 @@
 		const interval = window.setInterval(() => {
 			streamTickMs = Date.now();
 		}, 1_000);
+
+		return () => {
+			window.clearInterval(interval);
+		};
+	});
+
+	$effect(() => {
+		if (!selectedThreadId || !activeTurnId || activeTurnStartedAt === null) {
+			return;
+		}
+
+		const threadId = selectedThreadId;
+		void refreshThreadUsage(threadId);
+		const interval = window.setInterval(() => {
+			void refreshThreadUsage(threadId);
+		}, 5_000);
 
 		return () => {
 			window.clearInterval(interval);
@@ -408,6 +439,24 @@
 			...threadDetails,
 			[threadId]: result.thread
 		};
+		threadUsageByThread = {
+			...threadUsageByThread,
+			[threadId]: result.usage.turns
+		};
+	}
+
+	async function refreshThreadUsage(threadId: string): Promise<void> {
+		try {
+			const result = await api<ThreadUsageResponse>(
+				`/api/threads/${encodeURIComponent(threadId)}/usage`
+			);
+			threadUsageByThread = {
+				...threadUsageByThread,
+				[threadId]: result.turns
+			};
+		} catch {
+			// keep the stream usable if usage parsing fails
+		}
 	}
 
 	async function loadProjectThreads(
@@ -651,7 +700,6 @@
 	): Promise<void> {
 		const previous = pendingRequestsByThread[threadId] ?? [];
 		resolvingRequestId = requestId;
-		removePendingRequest(threadId, requestId);
 
 		try {
 			await api(`/api/threads/${encodeURIComponent(threadId)}/requests/${requestId}/resolve`, {
@@ -1473,13 +1521,20 @@
 			entry.showStatusNote &&
 			activeTurnStartedAt !== null &&
 			isInProgressTurnStatus(entry.turnStatus) &&
-			isAgentMessageRenderItem(entry.item) &&
-			entry.item.phase === 'streaming'
+			isAgentMessageRenderItem(entry.item)
 		);
 	}
 
 	function entryIsInterrupted(entry: RenderedConversationEntry): boolean {
 		return entry.showStatusNote && isInterruptedTurnStatus(entry.turnStatus);
+	}
+
+	function entryContextLeftPercent(entry: RenderedConversationEntry): number | null {
+		if (!entry.showStatusNote) {
+			return null;
+		}
+
+		return currentThreadUsage[entry.turnId]?.contextLeftPercent ?? null;
 	}
 
 	function findStreamingItemReplacementIndex(items: CodexThreadItem[], item: CodexThreadItem): number {
@@ -1804,11 +1859,25 @@
 								interrupted={entryIsInterrupted(entry)}
 								elapsedSeconds={entryElapsedSeconds(entry)}
 								showStatusNote={entry.showStatusNote}
+								contextLeftPercent={entryContextLeftPercent(entry)}
 							/>
 						{:else if isCommandExecutionItem(entry.item) || isFileChangeItem(entry.item)}
 							<ToolActivity item={entry.item} projectsRoot={status?.projectsRoot ?? ''} />
 						{/if}
 					{/each}
+
+					{#if activeQuestionRequests.length > 0}
+						<div class="grid gap-3">
+							{#each activeQuestionRequests as request (request.requestId)}
+								<ServerRequestPanel
+									{request}
+									inline
+									resolving={resolvingRequestId === request.requestId}
+									onresolve={(payload) => resolvePendingRequest(request.threadId, request.requestId, payload)}
+								/>
+							{/each}
+						</div>
+					{/if}
 				{/if}
 			</div>
 		</section>
@@ -1816,13 +1885,13 @@
 		<footer class="relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4">
 			<div class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(9,10,12,0),rgba(9,10,12,0.56)_42%,rgba(9,10,12,0.92)_100%)] backdrop-blur-[10px]"></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
-				{#if activePendingRequests.length > 0}
+				{#if activeFooterRequests.length > 0}
 					<div class="mb-3 grid gap-3">
-						{#each activePendingRequests as request (request.requestId)}
+						{#each activeFooterRequests as request (request.requestId)}
 							<ServerRequestPanel
 								{request}
 								resolving={resolvingRequestId === request.requestId}
-								onresolve={(payload) => void resolvePendingRequest(request.threadId, request.requestId, payload)}
+								onresolve={(payload) => resolvePendingRequest(request.threadId, request.requestId, payload)}
 							/>
 						{/each}
 					</div>

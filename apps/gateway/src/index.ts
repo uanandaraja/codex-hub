@@ -1,7 +1,10 @@
 import { Buffer } from 'node:buffer';
+import { createReadStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createInterface } from 'node:readline';
 import { URL } from 'node:url';
 import { CodexAppServerBridge, JsonRpcError } from './codex-app-server';
 import type {
@@ -16,12 +19,16 @@ import type {
 	ModelListResponse,
 	PendingServerRequest,
 	ProjectSummary,
-	SandboxMode
+	SandboxMode,
+	ThreadReadResponse,
+	ThreadUsageResponse,
+	TurnContextUsage
 } from './types';
 
 const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = '127.0.0.1';
 const THREAD_PAGE_SIZE = 200;
+const EMPTY_THREAD_USAGE: ThreadUsageResponse = { turns: {} };
 
 const config: GatewayConfig = {
 	port: Number.parseInt(process.env.PORT ?? `${DEFAULT_PORT}`, 10),
@@ -35,6 +42,7 @@ const config: GatewayConfig = {
 };
 
 const bridge = new CodexAppServerBridge(config);
+const threadUsageCache = new Map<string, { modifiedAtMs: number; usage: ThreadUsageResponse }>();
 
 const server = createServer((request, response) => {
 	void handleRequest(request, response);
@@ -277,16 +285,30 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			return sendJson(response, 200, result);
 		}
 
+		const threadUsageMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/usage$/);
+		if (method === 'GET' && threadUsageMatch) {
+			await bridge.ensureReady();
+			const threadId = decodeURIComponent(threadUsageMatch[1]);
+			const thread = await bridge.request<Record<string, unknown>>('thread/read', {
+				threadId,
+				includeTurns: false
+			});
+			return sendJson(response, 200, await readThreadUsageResponse(thread));
+		}
+
 		const threadMatch = pathname.match(/^\/v1\/threads\/([^/]+)$/);
 		if (method === 'GET' && threadMatch) {
 			await bridge.ensureReady();
 			const threadId = decodeURIComponent(threadMatch[1]);
 			const includeTurns = readOptionalBoolean(url.searchParams.get('includeTurns')) ?? true;
-			const result = await bridge.request<Record<string, unknown>>('thread/read', {
+			const result = await bridge.request<Record<string, unknown> & { thread: CodexThread }>('thread/read', {
 				threadId,
 				includeTurns
 			});
-			return sendJson(response, 200, result);
+			return sendJson(response, 200, {
+				...result,
+				usage: await readThreadUsageResponse(result)
+			} satisfies ThreadReadResponse);
 		}
 
 		if (method === 'GET' && pathname === '/v1/fs') {
@@ -616,6 +638,164 @@ function buildSandboxPolicy(mode: string | null): Record<string, unknown> | unde
 function readRequestId(value: string): number | null {
 	const parsed = Number.parseInt(value, 10);
 	return Number.isNaN(parsed) ? null : parsed;
+}
+
+async function readThreadUsageResponse(threadReadResult: Record<string, unknown>): Promise<ThreadUsageResponse> {
+	const threadPath = readThreadSessionPath(threadReadResult);
+	if (!threadPath) {
+		return EMPTY_THREAD_USAGE;
+	}
+
+	const cached = await readCachedThreadUsage(threadPath);
+	return cached;
+}
+
+async function readCachedThreadUsage(threadPath: string): Promise<ThreadUsageResponse> {
+	try {
+		const metadata = await stat(threadPath);
+		if (!metadata.isFile()) {
+			threadUsageCache.delete(threadPath);
+			return EMPTY_THREAD_USAGE;
+		}
+
+		const cached = threadUsageCache.get(threadPath);
+		if (cached && cached.modifiedAtMs === metadata.mtimeMs) {
+			return cached.usage;
+		}
+
+		const usage = await parseThreadUsage(threadPath);
+		threadUsageCache.set(threadPath, {
+			modifiedAtMs: metadata.mtimeMs,
+			usage
+		});
+		return usage;
+	} catch {
+		threadUsageCache.delete(threadPath);
+		return EMPTY_THREAD_USAGE;
+	}
+}
+
+async function parseThreadUsage(threadPath: string): Promise<ThreadUsageResponse> {
+	const turns: Record<string, TurnContextUsage> = {};
+	const input = createReadStream(threadPath, { encoding: 'utf8' });
+	const lines = createInterface({
+		input,
+		crlfDelay: Infinity
+	});
+	let activeTurnId: string | null = null;
+
+	try {
+		for await (const line of lines) {
+			if (!line) {
+				continue;
+			}
+
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(line);
+			} catch {
+				continue;
+			}
+
+			if (!isRecord(parsed) || parsed.type !== 'event_msg' || !isRecord(parsed.payload)) {
+				continue;
+			}
+
+			const payload = parsed.payload;
+			const eventType = readOptionalString(payload.type);
+			if (!eventType) {
+				continue;
+			}
+
+			if (eventType === 'task_started') {
+				activeTurnId = readOptionalString(payload.turn_id);
+				if (!activeTurnId) {
+					continue;
+				}
+
+				const target = getOrCreateTurnUsage(turns, activeTurnId);
+				const contextWindow = readOptionalFiniteNumber(payload.model_context_window);
+				if (contextWindow !== null) {
+					target.modelContextWindow = contextWindow;
+				}
+				continue;
+			}
+
+			if (eventType === 'task_complete') {
+				activeTurnId = null;
+				continue;
+			}
+
+			if (eventType !== 'token_count' || !activeTurnId) {
+				continue;
+			}
+
+			const info = isRecord(payload.info) ? payload.info : null;
+			if (!info) {
+				continue;
+			}
+
+			const target = getOrCreateTurnUsage(turns, activeTurnId);
+			const contextWindow = readOptionalFiniteNumber(info.model_context_window);
+			if (contextWindow !== null) {
+				target.modelContextWindow = contextWindow;
+			}
+
+			const lastTokenUsage = isRecord(info.last_token_usage) ? info.last_token_usage : null;
+			const totalTokens = lastTokenUsage
+				? readOptionalFiniteNumber(lastTokenUsage.total_tokens)
+				: null;
+			if (totalTokens !== null) {
+				target.lastTokenUsageTotalTokens = totalTokens;
+			}
+		}
+	} finally {
+		lines.close();
+		input.destroy();
+	}
+
+	for (const usage of Object.values(turns)) {
+		usage.contextLeftPercent = computeContextLeftPercent(
+			usage.lastTokenUsageTotalTokens,
+			usage.modelContextWindow
+		);
+	}
+
+	return { turns };
+}
+
+function getOrCreateTurnUsage(
+	turns: Record<string, TurnContextUsage>,
+	turnId: string
+): TurnContextUsage {
+	turns[turnId] ??= {
+		lastTokenUsageTotalTokens: null,
+		modelContextWindow: null,
+		contextLeftPercent: null
+	};
+	return turns[turnId];
+}
+
+function computeContextLeftPercent(tokensUsed: number | null, contextWindow: number | null): number | null {
+	if (tokensUsed === null || contextWindow === null || contextWindow <= 0) {
+		return null;
+	}
+
+	const remaining = 1 - tokensUsed / contextWindow;
+	return Math.max(0, Math.min(100, Math.round(remaining * 100)));
+}
+
+function readThreadSessionPath(threadReadResult: Record<string, unknown>): string | null {
+	const thread = isRecord(threadReadResult.thread) ? threadReadResult.thread : null;
+	return thread ? readOptionalString(thread.path) : null;
+}
+
+function readOptionalFiniteNumber(value: unknown): number | null {
+	return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
 }
 
 function parseBoolean(value: string | undefined): boolean {

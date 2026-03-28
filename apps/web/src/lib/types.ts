@@ -73,8 +73,19 @@ export interface CodexThread {
 	turns: CodexTurn[];
 }
 
+export interface TurnContextUsage {
+	lastTokenUsageTotalTokens: number | null;
+	modelContextWindow: number | null;
+	contextLeftPercent: number | null;
+}
+
+export interface ThreadUsageResponse {
+	turns: Record<string, TurnContextUsage>;
+}
+
 export interface ThreadReadResponse {
 	thread: CodexThread;
+	usage: ThreadUsageResponse;
 }
 
 export interface ThreadStartResponse {
