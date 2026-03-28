@@ -3,6 +3,7 @@
 	import { ArrowsClockwiseIcon, ListIcon, PlusIcon } from 'phosphor-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
+	import ToolActivity from '$lib/components/ToolActivity.svelte';
 	import type { PageData } from './$types';
 	import type {
 		CodexThread,
@@ -55,11 +56,6 @@
 		'flex w-full min-w-0 items-center justify-between gap-3 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-[0.95rem] text-left text-fg';
 	const chatRowClass =
 		'grid w-full min-w-0 grid-cols-1 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-3 pl-[1.85rem] text-left text-fg';
-	const activityRowClass =
-		'mb-3 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[14px] leading-[1.6] text-muted';
-	const commandRowClass =
-		'mb-3 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[12px] leading-[1.6] text-muted';
-
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
@@ -78,7 +74,9 @@
 		currentThread ? currentThread.turns.flatMap((turn) => turn.items) : []
 	);
 
-	const renderedConversationItems = $derived.by<CodexThreadItem[]>(() => conversationItems);
+	const renderedConversationItems = $derived.by<CodexThreadItem[]>(() =>
+		conversationItems.filter((item) => shouldRenderConversationItem(item))
+	);
 
 	$effect(() => {
 		if (!selectedProjectPath && projects[0]) {
@@ -391,7 +389,6 @@
 
 		if (notification.method === 'turn/started') {
 			activeTurnId = readTurnId(notification.params) ?? 'pending';
-			ensureStreamingAssistantMessage(threadId);
 			return;
 		}
 
@@ -645,41 +642,6 @@
 			.join('\n\n');
 	}
 
-	function summarizeCommand(item: Extract<CodexThreadItem, { type: 'commandExecution' }>): string {
-		if (item.status === 'in_progress' || item.status === 'running' || item.status === 'pending') {
-			return 'Running';
-		}
-
-		if (item.status === 'failed' || (item.exitCode !== null && item.exitCode !== 0)) {
-			return 'Failed';
-		}
-
-		return 'Ran';
-	}
-
-	function summarizeFileChange(item: Extract<CodexThreadItem, { type: 'fileChange' }>): string {
-		if (item.changes.length === 0) {
-			return 'files';
-		}
-
-		if (item.changes.length === 1) {
-			const [change] = item.changes;
-			if (change.kind.type === 'update' && change.kind.move_path) {
-				return `${shortPath(change.path)} to ${shortPath(change.kind.move_path)}`;
-			}
-
-			return shortPath(change.path);
-		}
-
-		const preview = item.changes
-			.slice(0, 2)
-			.map((change) => shortPath(change.path))
-			.join(', ');
-		const remaining = item.changes.length - 2;
-
-		return remaining > 0 ? `${preview} +${remaining}` : preview;
-	}
-
 	function applyOptimisticUserTurn(
 		threadId: string,
 		message: string
@@ -778,40 +740,6 @@
 			id: `${turnId}:assistant`,
 			text: '',
 			phase: 'streaming'
-		};
-	}
-
-	function ensureStreamingAssistantMessage(threadId: string): void {
-		const thread = threadDetails[threadId];
-		const lastTurn = thread?.turns.at(-1);
-		if (!thread || !lastTurn) {
-			return;
-		}
-
-		const items = [...lastTurn.items];
-		const lastItem = items.at(-1);
-		if (lastItem?.type === 'agentMessage') {
-			items[items.length - 1] = {
-				...lastItem,
-				phase: 'streaming'
-			};
-		} else {
-			items.push(createStreamingAgentMessage(lastTurn.id));
-		}
-
-		const turns = [...thread.turns];
-		turns[turns.length - 1] = {
-			...lastTurn,
-			status: 'in_progress',
-			items
-		};
-
-		threadDetails = {
-			...threadDetails,
-			[threadId]: {
-				...thread,
-				turns
-			}
 		};
 	}
 
@@ -955,37 +883,6 @@
 		return -1;
 	}
 
-	function summarizeFileChangeAction(item: Extract<CodexThreadItem, { type: 'fileChange' }>): string {
-		if (item.changes.length !== 1) {
-			return 'Changed';
-		}
-
-		const [change] = item.changes;
-		if (change.kind.type === 'update' && change.kind.move_path) {
-			return 'Moved';
-		}
-
-		if (change.kind.type === 'add') {
-			return 'Added';
-		}
-
-		if (change.kind.type === 'delete') {
-			return 'Deleted';
-		}
-
-		return 'Updated';
-	}
-
-	function summarizePlan(text: string): string {
-		const firstLine =
-			text
-				.split('\n')
-				.map((line) => line.trim())
-				.find(Boolean) ?? 'Next steps';
-
-		return firstLine.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '');
-	}
-
 	function isUserMessageItem(
 		item: CodexThreadItem
 	): item is Extract<CodexThreadItem, { type: 'userMessage' }> {
@@ -1014,6 +911,14 @@
 		item: CodexThreadItem
 	): item is Extract<CodexThreadItem, { type: 'agentMessage' }> {
 		return item.type === 'agentMessage';
+	}
+
+	function shouldRenderConversationItem(item: CodexThreadItem): boolean {
+		if (isPlanItem(item)) {
+			return false;
+		}
+
+		return isUserMessageItem(item) || isAgentMessageRenderItem(item) || isCommandExecutionItem(item) || isFileChangeItem(item);
 	}
 
 	async function scrollConversationToBottom(): Promise<void> {
@@ -1279,23 +1184,8 @@
 								content={item.text}
 								streaming={activeTurnId !== null && item.phase === 'streaming'}
 							/>
-						{:else if isCommandExecutionItem(item)}
-							<p class={commandRowClass}>
-								<span class="shrink-0">{summarizeCommand(item)}</span>
-								<code class="min-w-0 break-words font-mono text-[12px] text-fg [overflow-wrap:anywhere]">
-									{item.command}
-								</code>
-							</p>
-						{:else if isFileChangeItem(item)}
-							<p class={activityRowClass}>
-								<span class="shrink-0">{summarizeFileChangeAction(item)}</span>
-								<span class="min-w-0 break-words text-fg">{summarizeFileChange(item)}</span>
-							</p>
-						{:else if isPlanItem(item)}
-							<p class={activityRowClass}>
-								<span class="shrink-0">Planned</span>
-								<span class="min-w-0 break-words text-fg">{summarizePlan(item.text)}</span>
-							</p>
+						{:else if isCommandExecutionItem(item) || isFileChangeItem(item)}
+							<ToolActivity item={item} projectsRoot={status?.projectsRoot ?? ''} />
 						{/if}
 					{/each}
 				{/if}
