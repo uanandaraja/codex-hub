@@ -2,17 +2,23 @@ import { gatewayJson } from '$lib/server/gateway';
 import type { GatewayStatus, ProjectListResponse, ThreadListResponse } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async () => {
+export const load: PageServerLoad = async ({ url }) => {
 	const [statusResult, projectsResult] = await Promise.allSettled([
 		gatewayJson<GatewayStatus>('/v1/status'),
 		gatewayJson<ProjectListResponse>('/v1/projects')
 	]);
 
+	const requestedProjectPath = url.searchParams.get('project');
+	const requestedThreadId = url.searchParams.get('thread');
+	const availableProjects = projectsResult.status === 'fulfilled' ? projectsResult.value.data : [];
 	const initialProjectPath =
-		projectsResult.status === 'fulfilled' ? projectsResult.value.data[0]?.path ?? null : null;
+		requestedProjectPath && availableProjects.some((project) => project.path === requestedProjectPath)
+			? requestedProjectPath
+			: availableProjects[0]?.path ?? null;
 
 	let threads: ThreadListResponse['data'] = [];
 	let threadsError: string | null = null;
+	let initialThreadId: string | null = null;
 
 	if (initialProjectPath) {
 		try {
@@ -26,11 +32,18 @@ export const load: PageServerLoad = async () => {
 		}
 	}
 
+	if (requestedThreadId && threads.some((thread) => thread.id === requestedThreadId)) {
+		initialThreadId = requestedThreadId;
+	} else {
+		initialThreadId = threads[0]?.id ?? null;
+	}
+
 	return {
 		status: statusResult.status === 'fulfilled' ? statusResult.value : null,
 		projects: projectsResult.status === 'fulfilled' ? projectsResult.value.data : [],
 		threads,
 		initialProjectPath,
+		initialThreadId,
 		errors: {
 			status:
 				statusResult.status === 'rejected'

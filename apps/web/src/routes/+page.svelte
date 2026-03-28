@@ -1,8 +1,12 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
+	import { ArrowsClockwiseIcon, ListIcon, PlusIcon } from 'phosphor-svelte';
+	import ChatMessage from '$lib/components/ChatMessage.svelte';
+	import PromptInput from '$lib/components/PromptInput.svelte';
 	import type { PageData } from './$types';
 	import type {
 		CodexThread,
+		CodexTurn,
 		CodexThreadItem,
 		GatewayStatus,
 		ProjectSummary,
@@ -20,20 +24,36 @@
 		() => data.errors.status ?? data.errors.projects ?? data.errors.threads ?? null
 	);
 	const initialProjectPath = untrack(() => data.initialProjectPath ?? initialProjects[0]?.path ?? null);
+	const initialThreadId = untrack(() => data.initialThreadId ?? resolveInitialThreadId(initialThreads));
 
 	let status = $state<GatewayStatus | null>(initialStatus);
 	let projects = $state<ProjectSummary[]>(initialProjects);
 	let threads = $state<CodexThread[]>(initialThreads);
 	let threadDetails = $state<Record<string, CodexThread>>({});
 	let selectedProjectPath = $state<string | null>(initialProjectPath);
-	let selectedThreadId = $state<string | null>(resolveInitialThreadId(initialThreads));
+	let selectedThreadId = $state<string | null>(initialThreadId);
 	let creatingThread = $state(false);
 	let refreshingWorkspace = $state(false);
 	let banner = $state<string | null>(initialBanner);
 	let composer = $state('');
 	let activeTurnId = $state<string | null>(null);
-	let liveAgentText = $state('');
 	let conversationBody = $state<HTMLElement | null>(null);
+	let sidebarOpen = $state(false);
+	let isDesktopViewport = false;
+	let hasMounted = false;
+	let optimisticTurnCounter = 0;
+	let eventSource = $state<EventSource | null>(null);
+	let subscribedThreadId = $state<string | null>(null);
+	let threadEventsReady = $state<Promise<void> | null>(null);
+
+	const iconButtonClass =
+		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
+	const projectRowClass =
+		'flex w-full min-w-0 items-center justify-between gap-3 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-[0.95rem] text-left text-fg';
+	const chatRowClass =
+		'grid w-full min-w-0 grid-cols-1 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-3 pl-[1.85rem] text-left text-fg';
+	const activityRowClass =
+		'mb-3 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[14px] leading-[1.6] text-muted';
 
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
@@ -52,6 +72,8 @@
 	const conversationItems = $derived.by<CodexThreadItem[]>(() =>
 		currentThread ? currentThread.turns.flatMap((turn) => turn.items) : []
 	);
+
+	const renderedConversationItems = $derived.by<CodexThreadItem[]>(() => conversationItems);
 
 	$effect(() => {
 		if (!selectedProjectPath && projects[0]) {
@@ -73,40 +95,51 @@
 	});
 
 	onMount(() => {
+		hasMounted = true;
+		const mediaQuery = window.matchMedia('(min-width: 821px)');
+		const syncViewport = (matches: boolean) => {
+			isDesktopViewport = matches;
+			sidebarOpen = matches;
+		};
+
+		syncViewport(mediaQuery.matches);
+		const handleViewportChange = (event: MediaQueryListEvent) => {
+			syncViewport(event.matches);
+		};
+
+		mediaQuery.addEventListener('change', handleViewportChange);
+
 		if (selectedThreadId) {
 			void ensureThreadReady(selectedThreadId);
-			return;
-		}
-
-		if (selectedProjectPath) {
+		} else if (selectedProjectPath) {
 			void loadProjectThreads(selectedProjectPath);
 		}
+
+		return () => {
+			mediaQuery.removeEventListener('change', handleViewportChange);
+			closeThreadEvents();
+		};
 	});
 
 	$effect(() => {
-		void conversationItems;
-		void liveAgentText;
-		void activeTurnId;
+		void renderedConversationItems;
 		void scrollConversationToBottom();
 	});
 
 	$effect(() => {
-		if (!selectedThreadId) {
+		if (!hasMounted) {
 			return;
 		}
 
-		const source = new EventSource(`/api/threads/${encodeURIComponent(selectedThreadId)}/events`);
-		const onRpc = (event: Event) => {
-			const message = event as MessageEvent<string>;
-			handleNotification(JSON.parse(message.data) as RpcNotification);
-		};
+		syncUrlState();
+	});
 
-		source.addEventListener('rpc', onRpc);
+	$effect(() => {
+		if (selectedThreadId || !hasMounted) {
+			return;
+		}
 
-		return () => {
-			source.removeEventListener('rpc', onRpc);
-			source.close();
-		};
+		closeThreadEvents();
 	});
 
 	async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -149,7 +182,10 @@
 				return;
 			}
 
-			await loadProjectThreads(nextProjectPath, nextProjectPath === selectedProjectPath ? selectedThreadId : null);
+			await loadProjectThreads(
+				nextProjectPath,
+				nextProjectPath === selectedProjectPath ? selectedThreadId : null
+			);
 			banner = null;
 		} catch (error) {
 			banner = error instanceof Error ? error.message : 'Failed to refresh workspace.';
@@ -159,8 +195,13 @@
 	}
 
 	async function ensureThreadReady(threadId: string): Promise<void> {
+		if (threadId !== selectedThreadId) {
+			activeTurnId = null;
+		}
+
 		selectedThreadId = threadId;
 		try {
+			await ensureThreadEvents(threadId);
 			await api(`/api/threads/${encodeURIComponent(threadId)}/resume`, {
 				method: 'POST',
 				headers: {
@@ -224,6 +265,16 @@
 		}
 	}
 
+	async function handleProjectSelect(projectPath: string): Promise<void> {
+		collapseSidebarOnMobile();
+		await selectProject(projectPath);
+	}
+
+	async function handleThreadSelect(threadId: string): Promise<void> {
+		collapseSidebarOnMobile();
+		await ensureThreadReady(threadId);
+	}
+
 	async function createThread(projectPath = selectedProjectPath, firstMessage?: string): Promise<string | null> {
 		if (!projectPath) {
 			return null;
@@ -248,6 +299,7 @@
 			selectedProjectPath = projectPath;
 			selectedThreadId = result.thread.id;
 			projects = insertProjectSummary(projects, projectPath, result.thread);
+			await ensureThreadEvents(result.thread.id);
 			banner = null;
 
 			if (firstMessage) {
@@ -263,8 +315,13 @@
 		}
 	}
 
-	async function sendMessage(): Promise<void> {
-		const message = composer.trim();
+	async function handleCreateThread(projectPath = selectedProjectPath): Promise<void> {
+		collapseSidebarOnMobile();
+		await createThread(projectPath);
+	}
+
+	async function sendMessage(messageValue = composer): Promise<void> {
+		const message = messageValue.trim();
 		if (!message || !selectedProjectPath) {
 			return;
 		}
@@ -280,13 +337,12 @@
 	}
 
 	async function sendTurn(threadId: string, message: string): Promise<void> {
-		liveAgentText = '';
 		activeTurnId = 'pending';
+		const knownThread = threadDetails[threadId] ?? null;
+		const generatedName = shouldAutoNameThread(knownThread) ? generateThreadName(message) : null;
+		const optimisticState = applyOptimisticUserTurn(threadId, message);
 
 		try {
-			const knownThread = threadDetails[threadId] ?? null;
-			const generatedName = shouldAutoNameThread(knownThread) ? generateThreadName(message) : null;
-
 			await api(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
 				method: 'POST',
 				headers: {
@@ -301,6 +357,7 @@
 
 			await refreshThreads();
 		} catch (error) {
+			restoreOptimisticUserTurn(threadId, optimisticState);
 			composer = message;
 			activeTurnId = null;
 			banner = error instanceof Error ? error.message : 'Failed to send message.';
@@ -329,20 +386,43 @@
 
 		if (notification.method === 'turn/started') {
 			activeTurnId = readTurnId(notification.params) ?? 'pending';
-			liveAgentText = '';
+			ensureStreamingAssistantMessage(threadId);
+			return;
+		}
+
+		if (notification.method === 'item/started' || notification.method === 'item/completed') {
+			const item = readTurnItem(notification.params);
+			if (!item) {
+				return;
+			}
+
+			upsertStreamingTurnItem(threadId, readTurnId(notification.params), item);
 			return;
 		}
 
 		if (notification.method === 'item/agentMessage/delta') {
-			liveAgentText = `${liveAgentText}${readString(notification.params?.delta) ?? ''}`;
+			appendStreamingAgentDelta(
+				threadId,
+				readTurnId(notification.params),
+				readString(notification.params?.itemId),
+				readString(notification.params?.delta) ?? ''
+			);
 			return;
 		}
 
 		if (notification.method === 'turn/completed') {
+			void finalizeTurn(threadId);
+			return;
+		}
+	}
+
+	async function finalizeTurn(threadId: string): Promise<void> {
+		try {
+			await Promise.all([fetchThread(threadId), refreshThreads()]);
+		} catch (error) {
+			banner = error instanceof Error ? error.message : 'Failed to finalize chat.';
+		} finally {
 			activeTurnId = null;
-			liveAgentText = '';
-			void fetchThread(threadId);
-			void refreshThreads();
 		}
 	}
 
@@ -402,10 +482,23 @@
 	function readTurnId(params?: Record<string, unknown>): string | null {
 		const turn = params?.turn;
 		if (!turn || typeof turn !== 'object' || !('id' in turn)) {
-			return null;
+			return readString(params?.turnId);
 		}
 
 		return readString(turn.id);
+	}
+
+	function readTurnItem(params?: Record<string, unknown>): CodexThreadItem | null {
+		const item = params?.item;
+		if (!item || typeof item !== 'object') {
+			return null;
+		}
+
+		if (!('type' in item) || !('id' in item)) {
+			return null;
+		}
+
+		return item as CodexThreadItem;
 	}
 
 	function resolveInitialThreadId(initialThreadsList: CodexThread[]): string | null {
@@ -536,15 +629,6 @@
 		);
 	}
 
-	function formatTimestamp(seconds: number): string {
-		return new Date(seconds * 1000).toLocaleString([], {
-			month: 'short',
-			day: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit'
-		});
-	}
-
 	function renderUserText(item: CodexThreadItem): string {
 		if (!isUserMessageItem(item)) {
 			return '';
@@ -556,12 +640,345 @@
 			.join('\n\n');
 	}
 
-	function renderFileChanges(item: CodexThreadItem): string {
-		if (!isFileChangeItem(item)) {
-			return '';
+	function summarizeCommand(item: Extract<CodexThreadItem, { type: 'commandExecution' }>): string {
+		if (item.status === 'in_progress' || item.status === 'running' || item.status === 'pending') {
+			return 'Running';
 		}
 
-		return item.changes.map((change: { path: string }) => change.path).join('\n');
+		if (item.status === 'failed' || (item.exitCode !== null && item.exitCode !== 0)) {
+			return 'Failed';
+		}
+
+		return 'Ran';
+	}
+
+	function summarizeFileChange(item: Extract<CodexThreadItem, { type: 'fileChange' }>): string {
+		if (item.changes.length === 0) {
+			return 'files';
+		}
+
+		if (item.changes.length === 1) {
+			const [change] = item.changes;
+			if (change.kind.type === 'update' && change.kind.move_path) {
+				return `${shortPath(change.path)} to ${shortPath(change.kind.move_path)}`;
+			}
+
+			return shortPath(change.path);
+		}
+
+		const preview = item.changes
+			.slice(0, 2)
+			.map((change) => shortPath(change.path))
+			.join(', ');
+		const remaining = item.changes.length - 2;
+
+		return remaining > 0 ? `${preview} +${remaining}` : preview;
+	}
+
+	function applyOptimisticUserTurn(
+		threadId: string,
+		message: string
+	): { previousDetailedThread: CodexThread | null; previousThreads: CodexThread[] } | null {
+		const previousDetailedThread = threadDetails[threadId] ?? null;
+		const previousThreads = threads;
+		const baseThread = previousDetailedThread ?? threads.find((thread) => thread.id === threadId) ?? null;
+
+		if (!baseThread) {
+			return null;
+		}
+
+		const optimisticTurnId = `optimistic:${threadId}:${++optimisticTurnCounter}`;
+		const optimisticTurn: CodexTurn = {
+			id: optimisticTurnId,
+			status: 'in_progress',
+			error: null,
+			items: [
+				createOptimisticUserMessage(optimisticTurnId, message),
+				createStreamingAgentMessage(optimisticTurnId)
+			]
+		};
+		const optimisticPreview = trimLine(message) || baseThread.preview;
+		const optimisticUpdatedAt = Date.now();
+		const optimisticThread: CodexThread = {
+			...baseThread,
+			preview: optimisticPreview,
+			updatedAt: optimisticUpdatedAt,
+			turns: [...baseThread.turns, optimisticTurn]
+		};
+
+		threadDetails = {
+			...threadDetails,
+			[threadId]: optimisticThread
+		};
+		threads = sortThreads(
+			threads.map((thread) =>
+				thread.id === threadId
+					? {
+							...thread,
+							preview: optimisticPreview,
+							updatedAt: optimisticUpdatedAt
+						}
+					: thread
+			)
+		);
+
+		return { previousDetailedThread, previousThreads };
+	}
+
+	function restoreOptimisticUserTurn(
+		threadId: string,
+		state: { previousDetailedThread: CodexThread | null; previousThreads: CodexThread[] } | null
+	): void {
+		if (!state) {
+			return;
+		}
+
+		threads = state.previousThreads;
+
+		if (state.previousDetailedThread) {
+			threadDetails = {
+				...threadDetails,
+				[threadId]: state.previousDetailedThread
+			};
+			return;
+		}
+
+		const nextThreadDetails = { ...threadDetails };
+		delete nextThreadDetails[threadId];
+		threadDetails = nextThreadDetails;
+	}
+
+	function createOptimisticUserMessage(
+		turnId: string,
+		message: string
+	): Extract<CodexThreadItem, { type: 'userMessage' }> {
+		return {
+			type: 'userMessage',
+			id: `${turnId}:user`,
+			content: [
+				{
+					type: 'text',
+					text: message,
+					text_elements: []
+				}
+			]
+		};
+	}
+
+	function createStreamingAgentMessage(
+		turnId: string
+	): Extract<CodexThreadItem, { type: 'agentMessage' }> {
+		return {
+			type: 'agentMessage',
+			id: `${turnId}:assistant`,
+			text: '',
+			phase: 'streaming'
+		};
+	}
+
+	function ensureStreamingAssistantMessage(threadId: string): void {
+		const thread = threadDetails[threadId];
+		const lastTurn = thread?.turns.at(-1);
+		if (!thread || !lastTurn) {
+			return;
+		}
+
+		const items = [...lastTurn.items];
+		const lastItem = items.at(-1);
+		if (lastItem?.type === 'agentMessage') {
+			items[items.length - 1] = {
+				...lastItem,
+				phase: 'streaming'
+			};
+		} else {
+			items.push(createStreamingAgentMessage(lastTurn.id));
+		}
+
+		const turns = [...thread.turns];
+		turns[turns.length - 1] = {
+			...lastTurn,
+			status: 'in_progress',
+			items
+		};
+
+		threadDetails = {
+			...threadDetails,
+			[threadId]: {
+				...thread,
+				turns
+			}
+		};
+	}
+
+	function appendStreamingAgentDelta(
+		threadId: string,
+		turnId: string | null,
+		itemId: string | null,
+		delta: string
+	): void {
+		if (!delta) {
+			return;
+		}
+
+		const thread = threadDetails[threadId];
+		if (!thread) {
+			return;
+		}
+
+		const turnIndex = findStreamingTurnIndex(thread, turnId);
+		if (turnIndex < 0) {
+			return;
+		}
+
+		const lastTurn = thread.turns[turnIndex];
+		const items = [...lastTurn.items];
+		const itemIndex =
+			(itemId ? items.findIndex((item) => item.id === itemId) : -1) ??
+			-1;
+		const fallbackIndex =
+			itemIndex >= 0
+				? itemIndex
+				: items.findIndex(
+						(item) => item.type === 'agentMessage' && (item.phase === 'streaming' || item.text === '')
+					);
+
+		if (fallbackIndex >= 0 && items[fallbackIndex]?.type === 'agentMessage') {
+			const target = items[fallbackIndex];
+			items[fallbackIndex] = {
+				...target,
+				id: itemId ?? target.id,
+				text: `${target.text}${delta}`,
+				phase: 'streaming'
+			};
+		} else {
+			items.push({
+				...createStreamingAgentMessage(lastTurn.id),
+				id: itemId ?? `${lastTurn.id}:assistant`,
+				text: delta
+			});
+		}
+
+		const turns = [...thread.turns];
+		turns[turnIndex] = {
+			...lastTurn,
+			status: 'in_progress',
+			items
+		};
+
+		threadDetails = {
+			...threadDetails,
+			[threadId]: {
+				...thread,
+				turns
+			}
+		};
+	}
+
+	function upsertStreamingTurnItem(
+		threadId: string,
+		turnId: string | null,
+		item: CodexThreadItem
+	): void {
+		const thread = threadDetails[threadId];
+		if (!thread) {
+			return;
+		}
+
+		const turnIndex = findStreamingTurnIndex(thread, turnId);
+		if (turnIndex < 0) {
+			return;
+		}
+
+		const turn = thread.turns[turnIndex];
+		const items = [...turn.items];
+		const exactIndex = items.findIndex((entry) => entry.id === item.id);
+		if (exactIndex >= 0) {
+			items[exactIndex] = item;
+		} else {
+			const fallbackIndex = findStreamingItemReplacementIndex(items, item);
+			if (fallbackIndex >= 0) {
+				items[fallbackIndex] = item;
+			} else {
+				items.push(item);
+			}
+		}
+
+		const turns = [...thread.turns];
+		turns[turnIndex] = {
+			...turn,
+			status: 'in_progress',
+			items
+		};
+
+		threadDetails = {
+			...threadDetails,
+			[threadId]: {
+				...thread,
+				turns
+			}
+		};
+	}
+
+	function findStreamingTurnIndex(thread: CodexThread, turnId: string | null): number {
+		if (turnId) {
+			const exactIndex = thread.turns.findIndex((turn) => turn.id === turnId);
+			if (exactIndex >= 0) {
+				return exactIndex;
+			}
+		}
+
+		for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
+			if (thread.turns[index]?.status === 'in_progress') {
+				return index;
+			}
+		}
+
+		return thread.turns.length - 1;
+	}
+
+	function findStreamingItemReplacementIndex(items: CodexThreadItem[], item: CodexThreadItem): number {
+		if (item.type === 'userMessage') {
+			return items.findIndex((entry) => entry.type === 'userMessage');
+		}
+
+		if (item.type === 'agentMessage') {
+			return items.findIndex(
+				(entry) => entry.type === 'agentMessage' && (entry.phase === 'streaming' || entry.text === '')
+			);
+		}
+
+		return -1;
+	}
+
+	function summarizeFileChangeAction(item: Extract<CodexThreadItem, { type: 'fileChange' }>): string {
+		if (item.changes.length !== 1) {
+			return 'Changed';
+		}
+
+		const [change] = item.changes;
+		if (change.kind.type === 'update' && change.kind.move_path) {
+			return 'Moved';
+		}
+
+		if (change.kind.type === 'add') {
+			return 'Added';
+		}
+
+		if (change.kind.type === 'delete') {
+			return 'Deleted';
+		}
+
+		return 'Updated';
+	}
+
+	function summarizePlan(text: string): string {
+		const firstLine =
+			text
+				.split('\n')
+				.map((line) => line.trim())
+				.find(Boolean) ?? 'Next steps';
+
+		return firstLine.replace(/^[-*]\s+/, '').replace(/^\d+\.\s+/, '');
 	}
 
 	function isUserMessageItem(
@@ -576,9 +993,139 @@
 		return item.type === 'fileChange';
 	}
 
+	function isCommandExecutionItem(
+		item: CodexThreadItem
+	): item is Extract<CodexThreadItem, { type: 'commandExecution' }> {
+		return item.type === 'commandExecution';
+	}
+
+	function isPlanItem(
+		item: CodexThreadItem
+	): item is Extract<CodexThreadItem, { type: 'plan' }> {
+		return item.type === 'plan' && typeof item.text === 'string';
+	}
+
+	function isAgentMessageRenderItem(
+		item: CodexThreadItem
+	): item is Extract<CodexThreadItem, { type: 'agentMessage' }> {
+		return item.type === 'agentMessage';
+	}
+
 	async function scrollConversationToBottom(): Promise<void> {
 		await tick();
 		conversationBody?.scrollTo({ top: conversationBody.scrollHeight });
+	}
+
+	function toggleSidebar(): void {
+		sidebarOpen = !sidebarOpen;
+	}
+
+	function closeSidebar(): void {
+		sidebarOpen = false;
+	}
+
+	function collapseSidebarOnMobile(): void {
+		if (!isDesktopViewport) {
+			sidebarOpen = false;
+		}
+	}
+
+	function syncUrlState(): void {
+		const url = new URL(window.location.href);
+
+		if (selectedProjectPath) {
+			url.searchParams.set('project', selectedProjectPath);
+		} else {
+			url.searchParams.delete('project');
+		}
+
+		if (selectedThreadId) {
+			url.searchParams.set('thread', selectedThreadId);
+		} else {
+			url.searchParams.delete('thread');
+		}
+
+		const nextUrl = `${url.pathname}${url.search}${url.hash}`;
+		const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`;
+		if (nextUrl !== currentUrl) {
+			window.history.replaceState(window.history.state, '', nextUrl);
+		}
+	}
+
+	function closeThreadEvents(): void {
+		eventSource?.close();
+		eventSource = null;
+		subscribedThreadId = null;
+		threadEventsReady = null;
+	}
+
+	function ensureThreadEvents(threadId: string): Promise<void> {
+		if (subscribedThreadId === threadId && threadEventsReady) {
+			return threadEventsReady;
+		}
+
+		closeThreadEvents();
+		subscribedThreadId = threadId;
+		threadEventsReady = new Promise<void>((resolve, reject) => {
+			const source = new EventSource(`/api/threads/${encodeURIComponent(threadId)}/events`);
+			let settled = false;
+			const onReady = () => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				window.clearTimeout(timeout);
+				source.removeEventListener('ready', onReady);
+				source.removeEventListener('error', onInitialError);
+				resolve();
+			};
+			const onRpc = (event: Event) => {
+				const message = event as MessageEvent<string>;
+				handleNotification(JSON.parse(message.data) as RpcNotification);
+			};
+			const onInitialError = () => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				window.clearTimeout(timeout);
+				source.removeEventListener('ready', onReady);
+				source.removeEventListener('error', onInitialError);
+				source.close();
+				if (eventSource === source) {
+					eventSource = null;
+					subscribedThreadId = null;
+					threadEventsReady = null;
+				}
+				reject(new Error('Failed to subscribe to thread events.'));
+			};
+
+			const timeout = window.setTimeout(() => {
+				if (settled) {
+					return;
+				}
+
+				settled = true;
+				source.removeEventListener('ready', onReady);
+				source.removeEventListener('error', onInitialError);
+				source.close();
+				if (eventSource === source) {
+					eventSource = null;
+					subscribedThreadId = null;
+					threadEventsReady = null;
+				}
+				reject(new Error('Timed out waiting for thread events.'));
+			}, 5_000);
+
+			source.addEventListener('ready', onReady, { once: true });
+			source.addEventListener('rpc', onRpc);
+			source.addEventListener('error', onInitialError);
+			eventSource = source;
+		});
+
+		return threadEventsReady;
 	}
 </script>
 
@@ -587,567 +1134,179 @@
 	<meta name="description" content="Tailnet-hosted coding workspace." />
 </svelte:head>
 
-<div class="shell">
-	<aside class="sidebar">
-		<div class="sidebar-head">
-			<div>
-				<p class="kicker">Codex Hub</p>
-				<h1>Projects</h1>
+<div class="relative h-dvh max-h-dvh overflow-hidden bg-surface-0">
+	{#if sidebarOpen}
+		<button
+			type="button"
+			class="fixed inset-0 z-30 bg-black/60 min-[821px]:hidden"
+			onclick={closeSidebar}
+			aria-label="Close sidebar"
+		></button>
+	{/if}
+
+	<aside
+		class={`fixed inset-y-0 left-0 z-40 flex w-[19rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+	>
+		<div class="flex h-[4.75rem] min-w-0 items-center justify-between gap-3 border-b border-line px-[1.1rem]">
+			<div class="min-w-0">
+				<p class="mb-[0.35rem] truncate text-[0.72rem] uppercase tracking-[0.12em] text-muted">Codex Hub</p>
+				<h1 class="truncate text-base font-semibold tracking-[-0.02em] text-fg">Projects</h1>
 			</div>
-			<button class="ghost" type="button" onclick={() => void refreshWorkspace()}>
-				{refreshingWorkspace ? 'syncing' : 'sync'}
-			</button>
+
+			<div class="flex shrink-0 items-center gap-2">
+				<button
+					class={iconButtonClass}
+					type="button"
+					onclick={() => void handleCreateThread(selectedProjectPath)}
+					disabled={!selectedProjectPath || creatingThread}
+					aria-label="New chat"
+				>
+					<PlusIcon size={18} />
+				</button>
+				<button
+					class={iconButtonClass}
+					type="button"
+					onclick={() => void refreshWorkspace()}
+					aria-label={refreshingWorkspace ? 'Syncing workspace' : 'Sync workspace'}
+				>
+					<ArrowsClockwiseIcon size={18} class={refreshingWorkspace ? 'animate-spin' : undefined} />
+				</button>
+			</div>
 		</div>
 
-		{#if banner}
-			<div class="notice">{banner}</div>
-		{/if}
-
-		<div class="project-list">
-			{#each projects as project (project.path)}
-				<section class="project-block">
-					<button
-						type="button"
-						class:selected={project.path === selectedProjectPath}
-						class="project-row"
-						onclick={() => void selectProject(project.path)}
-					>
-						<span class="project-name">{project.name}</span>
-						<span class="project-count">{projectChatCount(project.path)}</span>
-					</button>
-
-					{#if project.path === selectedProjectPath}
-						<div class="chat-list">
-							<button
-								type="button"
-								class="chat-row chat-row-new"
-								onclick={() => void createThread(project.path)}
-								disabled={creatingThread}
-							>
-								<span>{creatingThread ? 'starting…' : '+ new chat'}</span>
-							</button>
-
-							{#if projectThreads.length === 0}
-								<div class="chat-empty">no chats yet</div>
-							{:else}
-								{#each projectThreads as thread (thread.id)}
-									<button
-										type="button"
-										class:selected={thread.id === selectedThreadId}
-										class="chat-row"
-										onclick={() => void ensureThreadReady(thread.id)}
-									>
-										<strong>{chatLabel(thread)}</strong>
-										<span>{chatPreview(thread)}</span>
-									</button>
-								{/each}
-							{/if}
-						</div>
-					{/if}
-				</section>
-			{:else}
-				<div class="sidebar-empty">
-					<strong>no projects yet</strong>
-					<span>projects appear once they have codex chats</span>
+		<div class="min-h-0 overflow-x-hidden overflow-y-auto pb-[1.1rem]">
+			{#if banner}
+				<div class="mx-[1.1rem] mt-4 border border-[rgba(255,124,96,0.24)] bg-[rgba(255,124,96,0.08)] p-[0.85rem] text-[0.82rem] text-notice">
+					{banner}
 				</div>
-			{/each}
+			{/if}
+
+			<div class="mt-4">
+				{#each projects as project, index (project.path)}
+					<section class:border-t={index > 0} class:border-line={index > 0}>
+						<button
+							type="button"
+							class={projectRowClass}
+							class:border-l-accent={project.path === selectedProjectPath}
+							class:bg-surface-2={project.path === selectedProjectPath}
+							onclick={() => void handleProjectSelect(project.path)}
+						>
+							<span class="min-w-0 flex-1 truncate font-sans">{project.name}</span>
+							<span class="font-mono text-[0.78rem] text-muted">{projectChatCount(project.path)}</span>
+						</button>
+
+						{#if project.path === selectedProjectPath}
+							<div class="pb-2">
+								{#if projectThreads.length === 0}
+									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
+										no chats yet
+									</div>
+								{:else}
+									{#each projectThreads as thread (thread.id)}
+										<button
+											type="button"
+											class={chatRowClass}
+											class:border-l-accent={thread.id === selectedThreadId}
+											class:bg-surface-2={thread.id === selectedThreadId}
+											onclick={() => void handleThreadSelect(thread.id)}
+										>
+											<strong class="block min-w-0 truncate text-[0.85rem] font-medium">
+												{chatLabel(thread)}
+											</strong>
+											<span class="block min-w-0 truncate font-mono text-[0.78rem] text-muted">
+												{chatPreview(thread)}
+											</span>
+										</button>
+									{/each}
+								{/if}
+							</div>
+						{/if}
+					</section>
+				{:else}
+					<div class="grid gap-[0.35rem] border-t border-line px-[1.1rem] py-4 font-mono text-[0.78rem] text-muted">
+						<strong>no projects yet</strong>
+						<span>projects appear once they have codex chats</span>
+					</div>
+				{/each}
+			</div>
 		</div>
 	</aside>
 
-	<main class="workspace">
-		<header class="workspace-head">
-			<div>
-				<p class="kicker">{currentProject?.name ?? 'No project'}</p>
-				<h2>{currentThread ? chatLabel(currentThread) : 'New chat'}</h2>
-			</div>
-			<div class="workspace-actions">
-				<span class:online={status?.state === 'ready'} class="status-dot"></span>
-				<button class="ghost" type="button" onclick={() => void createThread(selectedProjectPath)} disabled={!selectedProjectPath || creatingThread}>
-					new chat
+	<main
+		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
+	>
+		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] min-[821px]:hidden">
+			<div class="mx-auto flex w-full max-w-[680px] items-center">
+				<button
+					class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm`}
+					type="button"
+					onclick={toggleSidebar}
+					aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
+					aria-expanded={sidebarOpen}
+				>
+					<ListIcon size={18} />
 				</button>
 			</div>
-		</header>
+		</div>
 
-		<section class="conversation" bind:this={conversationBody}>
-			{#if !selectedProjectPath}
-				<div class="empty-state">
-					<strong>no projects yet</strong>
-					<span>projects appear once they have codex chats.</span>
-				</div>
-			{:else if !selectedThreadId && !creatingThread}
-				<div class="empty-state">
-					<strong>{currentProject?.name ?? 'project'}</strong>
-					<span>Start a chat for this repo.</span>
-				</div>
-			{:else}
-				{#each conversationItems as item (item.id)}
-					{#if item.type === 'userMessage'}
-						<article class="message message-user">
-							<pre class="message-body">{renderUserText(item)}</pre>
-						</article>
-					{:else if item.type === 'agentMessage'}
-						<article class="message message-agent">
-							<pre class="message-body">{item.text}</pre>
-						</article>
-					{:else if item.type === 'commandExecution'}
-						<article class="tool-block">
-							<div class="tool-head">
-								<span>command</span>
-								<span>{item.status}</span>
-							</div>
-							<code>{item.command}</code>
-						</article>
-					{:else if item.type === 'fileChange'}
-						<article class="tool-block">
-							<div class="tool-head">
-								<span>files</span>
-								<span>{item.status}</span>
-							</div>
-							<pre>{renderFileChanges(item)}</pre>
-						</article>
-					{:else if item.type === 'plan'}
-						<article class="tool-block subtle">
-							<div class="tool-head">
-								<span>plan</span>
-							</div>
-							<pre>{item.text}</pre>
-						</article>
-					{/if}
-				{/each}
-
-				{#if liveAgentText}
-					<article class="message message-agent live">
-						<pre class="message-body">{liveAgentText}</pre>
-					</article>
-				{/if}
-			{/if}
-		</section>
-
-		<footer class="composer">
-			<div class="composer-meta">
-				<span>{currentProject ? shortPath(currentProject.path) : 'select a project'}</span>
-				{#if currentThread}
-					<span>{formatTimestamp(currentThread.updatedAt)}</span>
+		<section
+			class="min-h-0 overflow-x-hidden overflow-y-auto px-[1.1rem] pt-[5rem] pb-8 min-[821px]:pt-8"
+			bind:this={conversationBody}
+		>
+			<div class="mx-auto flex w-full max-w-[680px] flex-col">
+				{#if !selectedProjectPath}
+					<div class="mb-4 grid w-full gap-[0.4rem] border border-line p-[1.15rem] text-muted">
+						<strong>no projects yet</strong>
+						<span>projects appear once they have codex chats.</span>
+					</div>
+				{:else if !selectedThreadId && !creatingThread}
+					<div class="mb-4 grid w-full gap-[0.4rem] border border-line p-[1.15rem] text-muted">
+						<strong>{currentProject?.name ?? 'project'}</strong>
+						<span>Start a chat for this repo.</span>
+					</div>
+				{:else}
+					{#each renderedConversationItems as item (item.id)}
+						{#if item.type === 'userMessage'}
+							<ChatMessage role="user" content={renderUserText(item)} />
+						{:else if isAgentMessageRenderItem(item)}
+							<ChatMessage
+								role="assistant"
+								content={item.text}
+								streaming={activeTurnId !== null && item.phase === 'streaming'}
+							/>
+						{:else if isCommandExecutionItem(item)}
+							<p class={activityRowClass}>
+								<span class="shrink-0">{summarizeCommand(item)}</span>
+								<code class="min-w-0 break-words font-mono text-[14px] text-fg [overflow-wrap:anywhere]">
+									{item.command}
+								</code>
+							</p>
+						{:else if isFileChangeItem(item)}
+							<p class={activityRowClass}>
+								<span class="shrink-0">{summarizeFileChangeAction(item)}</span>
+								<span class="min-w-0 break-words text-fg">{summarizeFileChange(item)}</span>
+							</p>
+						{:else if isPlanItem(item)}
+							<p class={activityRowClass}>
+								<span class="shrink-0">Planned</span>
+								<span class="min-w-0 break-words text-fg">{summarizePlan(item.text)}</span>
+							</p>
+						{/if}
+					{/each}
 				{/if}
 			</div>
+		</section>
 
-			<div class="composer-row">
-				<textarea
+		<footer class="relative z-[1] border-t border-line bg-[linear-gradient(180deg,rgba(13,14,18,0),rgba(13,14,18,0.94)_18%)] px-[1.1rem] pt-[0.9rem] pb-4">
+			<div class="mx-auto w-full max-w-[680px]">
+				<PromptInput
 					bind:value={composer}
-					rows="4"
-					placeholder={selectedProjectPath ? `message ${currentProject?.name ?? 'project'}` : 'select a project'}
-					disabled={!selectedProjectPath || activeTurnId !== null}
-				></textarea>
-
-				<div class="composer-side">
-					{#if activeTurnId}
-						<span class="streaming">streaming</span>
-					{/if}
-					<button
-						type="button"
-						onclick={() => void sendMessage()}
-						disabled={!selectedProjectPath || !composer.trim() || activeTurnId !== null}
-					>
-						send
-					</button>
-				</div>
+					placeholder="enter your message"
+					disabled={!selectedProjectPath}
+					isStreaming={activeTurnId !== null}
+					onsubmit={sendMessage}
+				/>
 			</div>
 		</footer>
 	</main>
 </div>
-
-<style>
-	.shell {
-		display: grid;
-		grid-template-columns: 21rem minmax(0, 1fr);
-		height: 100dvh;
-		max-height: 100dvh;
-		overflow: hidden;
-	}
-
-	.sidebar {
-		border-right: 1px solid var(--line);
-		background: var(--surface-1);
-		padding: 1.1rem 0;
-		min-height: 0;
-		overflow-y: auto;
-		overflow-x: hidden;
-	}
-
-	.sidebar-head,
-	.workspace-head,
-	.composer {
-		padding: 0 1.1rem;
-	}
-
-	.sidebar-head,
-	.workspace-head {
-		display: flex;
-		align-items: center;
-		justify-content: space-between;
-		gap: 1rem;
-		min-width: 0;
-	}
-
-	.sidebar-head > div,
-	.workspace-head > div {
-		min-width: 0;
-	}
-
-	.kicker {
-		margin: 0 0 0.35rem;
-		color: var(--text-muted);
-		font-size: 0.72rem;
-		letter-spacing: 0.12em;
-		text-transform: uppercase;
-	}
-
-	h1,
-	h2,
-	p {
-		margin: 0;
-	}
-
-	h1,
-	h2 {
-		font-size: 1rem;
-		font-weight: 600;
-		letter-spacing: -0.02em;
-	}
-
-	.notice {
-		margin: 1rem 1.1rem 0;
-		padding: 0.85rem;
-		border: 1px solid rgba(255, 124, 96, 0.24);
-		background: rgba(255, 124, 96, 0.08);
-		color: #ff9b85;
-		font-size: 0.82rem;
-	}
-
-	.project-list {
-		margin-top: 1rem;
-	}
-
-	.project-block + .project-block {
-		border-top: 1px solid var(--line);
-	}
-
-	.project-row,
-	.chat-row {
-		display: flex;
-		width: 100%;
-		min-width: 0;
-		align-items: center;
-		justify-content: space-between;
-		gap: 0.75rem;
-		border: 0;
-		border-left: 2px solid transparent;
-		background: transparent;
-		color: var(--text);
-		cursor: pointer;
-		text-align: left;
-	}
-
-	.project-row {
-		padding: 0.95rem 1.1rem;
-		font-family: 'Space Grotesk', sans-serif;
-	}
-
-	.project-row.selected,
-	.chat-row.selected {
-		border-left-color: var(--accent);
-		background: var(--surface-2);
-	}
-
-	.project-name,
-	.project-count,
-	.chat-row span,
-	.chat-empty {
-		font-family: 'IBM Plex Mono', monospace;
-		font-size: 0.78rem;
-	}
-
-	.project-name {
-		min-width: 0;
-		flex: 1 1 auto;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.project-count,
-	.chat-row span,
-	.chat-empty {
-		color: var(--text-muted);
-	}
-
-	.chat-list {
-		padding-bottom: 0.5rem;
-	}
-
-	.chat-row {
-		display: grid;
-		grid-template-columns: 1fr;
-		padding: 0.75rem 1.1rem 0.75rem 1.85rem;
-	}
-
-	.chat-row strong {
-		font-weight: 500;
-		font-size: 0.85rem;
-	}
-
-	.chat-row strong,
-	.chat-row span {
-		display: block;
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.chat-row-new {
-		color: var(--accent);
-	}
-
-	.chat-empty {
-		padding: 0.75rem 1.1rem 0.75rem 1.85rem;
-	}
-
-	.sidebar-empty {
-		display: grid;
-		gap: 0.35rem;
-		padding: 1rem 1.1rem;
-		color: var(--text-muted);
-		font-family: 'IBM Plex Mono', monospace;
-		font-size: 0.78rem;
-		border-top: 1px solid var(--line);
-	}
-
-	.workspace {
-		display: grid;
-		grid-template-rows: auto minmax(0, 1fr) auto;
-		min-height: 0;
-		min-width: 0;
-		overflow: hidden;
-		background: var(--surface-0);
-	}
-
-	.workspace-head {
-		height: 4.75rem;
-		border-bottom: 1px solid var(--line);
-	}
-
-	.workspace-actions {
-		display: flex;
-		align-items: center;
-		gap: 0.9rem;
-		flex: 0 0 auto;
-	}
-
-	.status-dot {
-		width: 0.6rem;
-		height: 0.6rem;
-		background: #525866;
-	}
-
-	.status-dot.online {
-		background: #78e08f;
-	}
-
-	.conversation {
-		min-height: 0;
-		overflow-y: auto;
-		overflow-x: hidden;
-		padding: 1.35rem 1.1rem 2rem;
-	}
-
-	.message,
-	.tool-block,
-	.empty-state {
-		width: min(100%, 58rem);
-		min-width: 0;
-		max-width: 58rem;
-		border: 1px solid var(--line);
-		margin-bottom: 1rem;
-	}
-
-	.message {
-		padding: 1rem 1.1rem;
-	}
-
-	.message-user {
-		margin-left: auto;
-		background: rgba(137, 180, 250, 0.08);
-	}
-
-	.message-agent {
-		background: var(--surface-1);
-	}
-
-	.message-body,
-	.tool-block pre {
-		margin: 0;
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-		word-break: break-word;
-		line-height: 1.6;
-	}
-
-	.message-body {
-		display: block;
-	}
-
-	.tool-block {
-		background: #0b0d11;
-	}
-
-	.tool-head {
-		display: flex;
-		justify-content: space-between;
-		gap: 1rem;
-		min-width: 0;
-		padding: 0.7rem 0.9rem;
-		border-bottom: 1px solid var(--line);
-		color: var(--text-muted);
-		font-family: 'IBM Plex Mono', monospace;
-		font-size: 0.72rem;
-		text-transform: lowercase;
-	}
-
-	.tool-block code,
-	.tool-block pre {
-		display: block;
-		padding: 0.9rem;
-		font-family: 'IBM Plex Mono', monospace;
-		font-size: 0.82rem;
-	}
-
-	.tool-block code {
-		white-space: pre-wrap;
-		overflow-wrap: anywhere;
-		word-break: break-word;
-	}
-
-	.tool-block.subtle {
-		background: var(--surface-1);
-	}
-
-	.live {
-		border-color: rgba(137, 180, 250, 0.3);
-	}
-
-	.empty-state {
-		display: grid;
-		gap: 0.4rem;
-		padding: 1.15rem;
-		color: var(--text-muted);
-	}
-
-	.composer {
-		position: relative;
-		z-index: 1;
-		border-top: 1px solid var(--line);
-		padding-top: 0.9rem;
-		padding-bottom: 1rem;
-		background: linear-gradient(180deg, rgba(13, 14, 18, 0), rgba(13, 14, 18, 0.94) 18%);
-	}
-
-	.composer-meta {
-		display: flex;
-		justify-content: space-between;
-		gap: 1rem;
-		min-width: 0;
-		margin-bottom: 0.7rem;
-		color: var(--text-muted);
-		font-family: 'IBM Plex Mono', monospace;
-		font-size: 0.72rem;
-	}
-
-	.composer-meta span {
-		min-width: 0;
-		overflow: hidden;
-		text-overflow: ellipsis;
-		white-space: nowrap;
-	}
-
-	.composer-row {
-		display: grid;
-		grid-template-columns: minmax(0, 1fr) auto;
-		gap: 0.75rem;
-		align-items: start;
-		min-width: 0;
-	}
-
-	textarea {
-		width: 100%;
-		min-height: 7rem;
-		max-height: 14rem;
-		border: 1px solid var(--line);
-		background: var(--surface-1);
-		color: var(--text);
-		padding: 1rem;
-		resize: none;
-		overflow: auto;
-		outline: none;
-	}
-
-	textarea::placeholder {
-		color: var(--text-muted);
-	}
-
-	.composer-side {
-		display: grid;
-		gap: 0.65rem;
-		justify-items: end;
-	}
-
-	button {
-		border: 1px solid var(--line);
-		background: var(--surface-1);
-		color: var(--text);
-		padding: 0.75rem 0.95rem;
-		cursor: pointer;
-		transition:
-			background 120ms ease,
-			border-color 120ms ease,
-			color 120ms ease;
-	}
-
-	button:hover:not(:disabled) {
-		border-color: var(--accent);
-		color: var(--accent);
-	}
-
-	button:disabled {
-		opacity: 0.45;
-		cursor: default;
-	}
-
-	.ghost {
-		background: transparent;
-	}
-
-	.streaming {
-		color: var(--accent);
-		font-family: 'IBM Plex Mono', monospace;
-		font-size: 0.72rem;
-	}
-
-	@media (max-width: 980px) {
-		.shell {
-			grid-template-columns: 18rem minmax(0, 1fr);
-		}
-	}
-
-	@media (max-width: 820px) {
-		.shell {
-			grid-template-columns: 1fr;
-			height: 100dvh;
-		}
-
-		.sidebar {
-			border-right: 0;
-			border-bottom: 1px solid var(--line);
-		}
-	}
-</style>
