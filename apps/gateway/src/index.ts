@@ -21,6 +21,7 @@ import type {
 	ProjectSummary,
 	SandboxMode,
 	ThreadReadResponse,
+	ThreadNameGenerateResponse,
 	ThreadUsageResponse,
 	TurnContextUsage
 } from './types';
@@ -251,6 +252,13 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const threadId = decodeURIComponent(threadNameMatch[1]);
 			await bridge.request('thread/name/set', { threadId, name });
 			return sendJson(response, 200, { ok: true, threadId, name });
+		}
+
+		const threadGenerateNameMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/generate-name$/);
+		if (method === 'POST' && threadGenerateNameMatch) {
+			await bridge.ensureReady();
+			const threadId = decodeURIComponent(threadGenerateNameMatch[1]);
+			return sendJson(response, 200, await generateThreadName(threadId));
 		}
 
 		const threadArchiveMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/archive$/);
@@ -527,6 +535,24 @@ function handleError(response: ServerResponse, error: unknown): void {
 	sendJson(response, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
 }
 
+function readErrorMessage(value: unknown): string {
+	if (typeof value === 'string' && value.trim()) {
+		return value.trim();
+	}
+
+	if (value && typeof value === 'object') {
+		if ('message' in value && typeof value.message === 'string' && value.message.trim()) {
+			return value.message.trim();
+		}
+
+		if ('error' in value) {
+			return readErrorMessage(value.error);
+		}
+	}
+
+	return 'Unknown error';
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of request) {
@@ -648,6 +674,259 @@ async function readThreadUsageResponse(threadReadResult: Record<string, unknown>
 
 	const cached = await readCachedThreadUsage(threadPath);
 	return cached;
+}
+
+async function generateThreadName(threadId: string): Promise<ThreadNameGenerateResponse> {
+	const result = await bridge.request<Record<string, unknown> & { thread: CodexThread }>('thread/read', {
+		threadId,
+		includeTurns: true
+	});
+	const thread = result.thread;
+	if (!thread) {
+		throw new Error(`thread ${threadId} was not found`);
+	}
+
+	const existingName = readOptionalString(thread.name);
+	if (existingName) {
+		return {
+			threadId,
+			name: existingName,
+			generated: false
+		};
+	}
+
+	const context = extractThreadNamingContext(thread);
+	const fallbackName = fallbackThreadName(thread);
+	if (!context) {
+		if (!fallbackName) {
+			throw new Error('thread does not have enough content to generate a name');
+		}
+
+		await bridge.request('thread/name/set', { threadId, name: fallbackName });
+		return {
+			threadId,
+			name: fallbackName,
+			generated: false
+		};
+	}
+
+	const generated = sanitizeGeneratedThreadName(
+		await requestGeneratedThreadName(thread, context.userText, context.assistantText)
+	);
+	const finalName = generated ?? fallbackName;
+	if (!finalName) {
+		throw new Error('title generation returned an empty name');
+	}
+
+	await bridge.request('thread/name/set', { threadId, name: finalName });
+	return {
+		threadId,
+		name: finalName,
+		generated: generated !== null
+	};
+}
+
+function extractThreadNamingContext(
+	thread: CodexThread
+): { userText: string; assistantText: string } | null {
+	const firstTurn = thread.turns[0];
+	if (!firstTurn) {
+		return null;
+	}
+
+	const userText = firstTurn.items
+		.filter((item) => item.type === 'userMessage')
+		.flatMap((item) => readUserMessageTexts(item))
+		.join('\n')
+		.trim();
+	const assistantText = firstTurn.items
+		.filter((item) => item.type === 'agentMessage')
+		.map((item) => readOptionalString(item.text))
+		.filter((value): value is string => value !== null)
+		.join('\n')
+		.trim();
+
+	if (!userText || !assistantText) {
+		return null;
+	}
+
+	return {
+		userText: userText.slice(0, 1_800),
+		assistantText: assistantText.slice(0, 2_400)
+	};
+}
+
+function readUserMessageTexts(item: CodexThread['turns'][number]['items'][number]): string[] {
+	if (!('content' in item) || !Array.isArray(item.content)) {
+		return [];
+	}
+
+	return item.content
+		.map((entry) => {
+			if (!entry || typeof entry !== 'object' || !('type' in entry) || entry.type !== 'text') {
+				return null;
+			}
+
+			return readOptionalString(entry.text);
+		})
+		.filter((value): value is string => value !== null);
+}
+
+function fallbackThreadName(thread: CodexThread): string | null {
+	const preview = readOptionalString(thread.preview);
+	if (!preview) {
+		return null;
+	}
+
+	const normalized = preview.replace(/\s+/g, ' ').trim();
+	if (!normalized) {
+		return null;
+	}
+
+	const firstClause = normalized.split(/[.!?](?:\s|$)/, 1)[0]?.trim() ?? normalized;
+	const candidate = firstClause || normalized;
+	if (candidate.length <= 72) {
+		return candidate;
+	}
+
+	const clipped = candidate.slice(0, 69).trimEnd();
+	return clipped ? `${clipped}...` : null;
+}
+
+function sanitizeGeneratedThreadName(value: string): string | null {
+	const normalized = value
+		.replace(/^["'`]+|["'`]+$/g, '')
+		.replace(/\s+/g, ' ')
+		.trim();
+	if (!normalized) {
+		return null;
+	}
+
+	const singleLine = normalized.split('\n', 1)[0]?.trim() ?? normalized;
+	const withoutLabel = singleLine.replace(/^title:\s*/i, '').trim();
+	if (!withoutLabel) {
+		return null;
+	}
+
+	if (withoutLabel.length <= 72) {
+		return withoutLabel;
+	}
+
+	const clipped = withoutLabel.slice(0, 69).trimEnd();
+	return clipped ? `${clipped}...` : null;
+}
+
+async function requestGeneratedThreadName(
+	thread: CodexThread,
+	userText: string,
+	assistantText: string
+): Promise<string> {
+	const promptThread = await bridge.request<Record<string, unknown> & { thread: { id: string } }>(
+		'thread/start',
+		{
+			cwd: thread.cwd,
+			modelProvider: thread.modelProvider,
+			approvalPolicy: 'never',
+			sandbox: 'read-only',
+			ephemeral: true,
+			experimentalRawEvents: false,
+			persistExtendedHistory: false
+		}
+	);
+	const promptThreadId =
+		typeof promptThread.thread === 'object' && promptThread.thread && 'id' in promptThread.thread
+			? readOptionalString(promptThread.thread.id)
+			: null;
+	if (!promptThreadId) {
+		throw new Error('failed to start ephemeral title-generation thread');
+	}
+
+	let finalMessage = '';
+	const unsubscribe = bridge.subscribe(promptThreadId, (notification: AppServerNotification) => {
+		if (notification.method === 'item/agentMessage/delta') {
+			const delta = readOptionalString(notification.params?.delta);
+			if (delta) {
+				finalMessage = `${finalMessage}${delta}`;
+			}
+			return;
+		}
+
+		if (notification.method === 'item/completed') {
+			const item = notification.params?.item;
+			if (!isRecord(item) || item.type !== 'agentMessage') {
+				return;
+			}
+
+			const text = readOptionalString(item.text);
+			if (text) {
+				finalMessage = text;
+			}
+		}
+	});
+
+	try {
+		const completionPromise = waitForThreadTurnCompletion(promptThreadId);
+		await bridge.request('turn/start', {
+			threadId: promptThreadId,
+			input: [
+				{
+					type: 'text',
+					text:
+						'Generate a concise title for this coding conversation.\n' +
+						'Rules:\n' +
+						'- Return only the title.\n' +
+						'- 2 to 6 words.\n' +
+						'- No quotes.\n' +
+						'- No markdown.\n' +
+						'- Reflect the main task clearly.\n\n' +
+						`User request:\n${userText}\n\n` +
+						`Assistant reply:\n${assistantText}`,
+					text_elements: []
+				}
+			],
+			approvalPolicy: 'never',
+			sandboxPolicy: buildSandboxPolicy('read-only')
+		});
+
+		await completionPromise;
+		return finalMessage;
+	} finally {
+		unsubscribe();
+		await bridge.request('thread/unsubscribe', { threadId: promptThreadId }).catch(() => {});
+	}
+}
+
+async function waitForThreadTurnCompletion(threadId: string): Promise<void> {
+	await new Promise<void>((resolve, reject) => {
+		const timeout = setTimeout(() => {
+			unsubscribe();
+			reject(new Error('timed out waiting for title generation'));
+		}, 60_000);
+
+		const unsubscribe = bridge.subscribe(threadId, (notification: AppServerNotification) => {
+			if (notification.method === 'error') {
+				clearTimeout(timeout);
+				unsubscribe();
+				reject(new Error(readErrorMessage(notification.params?.error)));
+				return;
+			}
+
+			if (notification.method === 'serverRequest/pending') {
+				clearTimeout(timeout);
+				unsubscribe();
+				reject(new Error('title generation requested unexpected user input'));
+				return;
+			}
+
+			if (notification.method !== 'turn/completed') {
+				return;
+			}
+
+			clearTimeout(timeout);
+			unsubscribe();
+			resolve();
+		});
+	});
 }
 
 async function readCachedThreadUsage(threadPath: string): Promise<ThreadUsageResponse> {

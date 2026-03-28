@@ -142,6 +142,12 @@ export interface ThreadReadResponse {
 	usage: ThreadUsageResponse;
 }
 
+export interface ThreadNameGenerateResponse {
+	threadId: string;
+	name: string;
+	generated: boolean;
+}
+
 export interface DirectoryEntry {
 	fileName: string;
 	isDirectory: boolean;

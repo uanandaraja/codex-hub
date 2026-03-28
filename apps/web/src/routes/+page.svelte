@@ -16,7 +16,9 @@
 		PendingServerRequestListResponse,
 		ProjectSummary,
 		RpcNotification,
+		ThreadListResponse,
 		ThreadReadResponse,
+		ThreadNameGenerateResponse,
 		ThreadStartResponse,
 		ThreadUsageResponse
 	} from '$lib/types';
@@ -34,6 +36,7 @@
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
 	const THREAD_PERMISSION_PRESETS_KEY = 'codex-hub.thread-permission-presets';
+	const THREAD_NAME_BACKFILL_KEY = 'codex-hub.thread-name-backfill-v2';
 
 	let { data } = $props<{ data: PageData }>();
 
@@ -60,6 +63,7 @@
 	let threadUsageByThread = $state<Record<string, ThreadReadResponse['usage']['turns']>>(
 		initialThreadId ? { [initialThreadId]: initialThreadUsage } : {}
 	);
+	let namingThreadIds = $state<Record<string, boolean>>({});
 	let pendingRequestsByThread = $state<Record<string, PendingServerRequest[]>>(
 		initialThreadId ? { [initialThreadId]: initialPendingRequests } : {}
 	);
@@ -278,6 +282,8 @@
 			void refreshModels();
 		}
 
+		void maybeRunThreadNameBackfill();
+
 		return () => {
 			mediaQuery.removeEventListener('change', handleViewportChange);
 			closeThreadEvents();
@@ -351,6 +357,14 @@
 		}
 
 		closeThreadEvents();
+	});
+
+	$effect(() => {
+		if (!currentThread) {
+			return;
+		}
+
+		void maybeGenerateThreadName(currentThread.id);
 	});
 
 	async function api<T>(path: string, init?: RequestInit): Promise<T> {
@@ -439,6 +453,11 @@
 			...threadDetails,
 			[threadId]: result.thread
 		};
+		if (threads.some((thread) => thread.id === threadId)) {
+			threads = sortThreads(
+				threads.map((thread) => (thread.id === threadId ? { ...thread, ...result.thread } : thread))
+			);
+		}
 		threadUsageByThread = {
 			...threadUsageByThread,
 			[threadId]: result.usage.turns
@@ -537,7 +556,6 @@
 
 		creatingThread = true;
 		try {
-			const generatedName = firstMessage ? generateThreadName(firstMessage) : null;
 			const result = await api<ThreadStartResponse>('/api/threads', {
 				method: 'POST',
 				headers: {
@@ -545,7 +563,6 @@
 				},
 				body: JSON.stringify({
 					cwd: projectPath,
-					name: generatedName,
 					model: selectedModelSummary?.model ?? undefined,
 					approvalPolicy: permissionPresetConfig.approvalPolicy,
 					sandbox: permissionPresetConfig.sandbox
@@ -611,8 +628,6 @@
 		activeTurnId = 'pending';
 		activeTurnStartedAt = Date.now();
 		interruptingTurn = false;
-		const knownThread = threadDetails[threadId] ?? null;
-		const generatedName = shouldAutoNameThread(knownThread) ? generateThreadName(message) : null;
 		const optimisticState = applyOptimisticUserTurn(threadId, message);
 
 		try {
@@ -630,10 +645,6 @@
 					sandbox: permissionPresetConfig.sandbox
 				})
 			});
-
-			if (generatedName) {
-				void setThreadName(threadId, generatedName).catch(() => {});
-			}
 
 			await refreshThreads();
 		} catch (error) {
@@ -815,6 +826,7 @@
 			activeTurnId = null;
 			activeTurnStartedAt = null;
 			interruptingTurn = false;
+			void maybeGenerateThreadName(threadId);
 		}
 	}
 
@@ -937,15 +949,7 @@
 		return initialThreadsList[0]?.id ?? null;
 	}
 
-	async function setThreadName(threadId: string, name: string): Promise<void> {
-		await api(`/api/threads/${encodeURIComponent(threadId)}/name`, {
-			method: 'POST',
-			headers: {
-				'content-type': 'application/json'
-			},
-			body: JSON.stringify({ name })
-		});
-
+	function applyThreadNameLocally(threadId: string, name: string): void {
 		threads = threads.map((thread) => (thread.id === threadId ? { ...thread, name } : thread));
 
 		const detailedThread = threadDetails[threadId];
@@ -960,38 +964,146 @@
 		}
 	}
 
-	function shouldAutoNameThread(thread: CodexThread | null): boolean {
-		if (!thread || thread.name) {
+	function shouldGenerateThreadName(thread: CodexThread | null): boolean {
+		if (!thread || thread.name || namingThreadIds[thread.id]) {
 			return false;
 		}
 
-		return thread.turns.length === 0 || !thread.turns.some((turn) => hasUserMessage(turn.items));
+		const firstTurn = findFirstCompletedNamingTurn(thread);
+		if (!firstTurn || firstTurn.status !== 'completed') {
+			return false;
+		}
+
+		const hasAssistantMessage = firstTurn.items.some(
+			(item) =>
+				item.type === 'agentMessage' &&
+				typeof item.text === 'string' &&
+				trimLine(item.text).length > 0
+		);
+
+		return hasUserMessage(firstTurn.items) && hasAssistantMessage;
 	}
 
 	function hasUserMessage(items: CodexThreadItem[]): boolean {
 		return items.some((item) => item.type === 'userMessage');
 	}
 
-	function generateThreadName(message: string): string | null {
-		const normalized = message
-			.replace(/```[\s\S]*?```/g, ' ')
-			.replace(/`([^`]+)`/g, '$1')
-			.replace(/\[(.*?)\]\((.*?)\)/g, '$1')
-			.replace(/\s+/g, ' ')
-			.trim();
+	function findFirstCompletedNamingTurn(thread: CodexThread): CodexTurn | null {
+		for (const turn of thread.turns) {
+			if (turn.status !== 'completed') {
+				continue;
+			}
 
-		if (!normalized) {
-			return null;
+			const hasAssistantMessage = turn.items.some(
+				(item) =>
+					item.type === 'agentMessage' &&
+					typeof item.text === 'string' &&
+					trimLine(item.text).length > 0
+			);
+			if (hasUserMessage(turn.items) && hasAssistantMessage) {
+				return turn;
+			}
 		}
 
-		const firstClause = normalized.split(/[.!?](?:\s|$)/, 1)[0]?.trim() ?? normalized;
-		const candidate = firstClause || normalized;
-		if (candidate.length <= 72) {
-			return candidate;
+		return null;
+	}
+
+	async function maybeGenerateThreadName(threadId: string): Promise<void> {
+		const thread = threadDetails[threadId] ?? null;
+		if (!shouldGenerateThreadName(thread)) {
+			return;
 		}
 
-		const clipped = candidate.slice(0, 69).trimEnd();
-		return clipped ? `${clipped}...` : null;
+		await requestThreadNameGeneration(threadId);
+	}
+
+	async function requestThreadNameGeneration(threadId: string): Promise<boolean> {
+		if (namingThreadIds[threadId]) {
+			return false;
+		}
+
+		namingThreadIds = {
+			...namingThreadIds,
+			[threadId]: true
+		};
+
+		try {
+			const result = await api<ThreadNameGenerateResponse>(
+				`/api/threads/${encodeURIComponent(threadId)}/generate-name`,
+				{
+					method: 'POST'
+				}
+			);
+			if (result.name) {
+				applyThreadNameLocally(threadId, result.name);
+				return true;
+			}
+		} catch {
+			// Keep the existing preview fallback when background naming fails.
+		} finally {
+			const next = { ...namingThreadIds };
+			delete next[threadId];
+			namingThreadIds = next;
+		}
+
+		return false;
+	}
+
+	function shouldBackfillThreadName(thread: CodexThread): boolean {
+		return !trimLine(thread.name).length;
+	}
+
+	async function listAllThreadsForBackfill(): Promise<CodexThread[]> {
+		const threads: CodexThread[] = [];
+		let cursor: string | null = null;
+
+		do {
+			const suffix: string = cursor
+				? `?limit=200&cursor=${encodeURIComponent(cursor)}`
+				: '?limit=200';
+			const page: ThreadListResponse = await api<ThreadListResponse>(`/api/threads${suffix}`);
+			threads.push(...page.data);
+			cursor = page.nextCursor;
+		} while (cursor);
+
+		return threads;
+	}
+
+	async function maybeRunThreadNameBackfill(): Promise<void> {
+		try {
+			if (window.localStorage.getItem(THREAD_NAME_BACKFILL_KEY) === 'done') {
+				return;
+			}
+
+			const targets = (await listAllThreadsForBackfill())
+				.filter(shouldBackfillThreadName)
+				.map((thread) => thread.id);
+			if (targets.length === 0) {
+				window.localStorage.setItem(THREAD_NAME_BACKFILL_KEY, 'done');
+				return;
+			}
+
+			let failed = false;
+			const concurrency = 3;
+			let cursor = 0;
+			const worker = async () => {
+				while (cursor < targets.length) {
+					const threadId = targets[cursor];
+					cursor += 1;
+					const success = await requestThreadNameGeneration(threadId);
+					if (!success) {
+						failed = true;
+					}
+				}
+			};
+
+			await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
+			if (!failed) {
+				window.localStorage.setItem(THREAD_NAME_BACKFILL_KEY, 'done');
+			}
+		} catch {
+			// retry on a later reload if the migration request fails
+		}
 	}
 
 	function sortThreads(list: CodexThread[]): CodexThread[] {
@@ -1769,7 +1881,7 @@
 							class:bg-surface-2={project.path === selectedProjectPath}
 							onclick={() => void handleProjectSelect(project.path)}
 						>
-							<span class="min-w-0 flex-1 truncate font-sans">{project.name}</span>
+							<span class="min-w-0 flex-1 truncate font-sans text-[0.85rem]">{project.name}</span>
 							<span class="font-mono text-[0.78rem] text-muted">{projectChatCount(project.path)}</span>
 						</button>
 
