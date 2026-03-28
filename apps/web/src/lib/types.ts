@@ -98,6 +98,135 @@ export interface ProjectListResponse {
 	data: ProjectSummary[];
 }
 
+export interface ModelReasoningEffortOption {
+	reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+	description: string;
+}
+
+export interface ModelSummary {
+	id: string;
+	model: string;
+	displayName: string;
+	description: string;
+	hidden: boolean;
+	isDefault: boolean;
+	defaultReasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+	supportedReasoningEfforts: ModelReasoningEffortOption[];
+}
+
+export interface ModelListResponse {
+	data: ModelSummary[];
+	nextCursor: string | null;
+}
+
+export interface CommandExecutionRequestApprovalParams {
+	threadId: string;
+	turnId: string;
+	itemId: string;
+	approvalId?: string | null;
+	reason?: string | null;
+	command?: string | null;
+	cwd?: string | null;
+	availableDecisions?:
+		| Array<
+				| 'accept'
+				| 'acceptForSession'
+				| 'decline'
+				| 'cancel'
+				| { acceptWithExecpolicyAmendment: { execpolicy_amendment: unknown } }
+				| { applyNetworkPolicyAmendment: { network_policy_amendment: unknown } }
+		  >
+		| null;
+}
+
+export interface FileChangeRequestApprovalParams {
+	threadId: string;
+	turnId: string;
+	itemId: string;
+	reason?: string | null;
+	grantRoot?: string | null;
+}
+
+export interface RequestPermissionProfile {
+	fileSystem?: {
+		read?: string[] | null;
+		write?: string[] | null;
+	} | null;
+	network?: {
+		enabled?: boolean | null;
+	} | null;
+}
+
+export interface PermissionsRequestApprovalParams {
+	threadId: string;
+	turnId: string;
+	itemId: string;
+	reason: string | null;
+	permissions: RequestPermissionProfile;
+}
+
+export interface ToolRequestUserInputOption {
+	label: string;
+	description: string;
+}
+
+export interface ToolRequestUserInputQuestion {
+	header: string;
+	id: string;
+	question: string;
+	isOther?: boolean;
+	isSecret?: boolean;
+	options?: ToolRequestUserInputOption[] | null;
+}
+
+export interface ToolRequestUserInputParams {
+	threadId: string;
+	turnId: string;
+	itemId: string;
+	questions: ToolRequestUserInputQuestion[];
+}
+
+export type PendingServerRequest =
+	| {
+			requestId: number;
+			method: 'item/commandExecution/requestApproval';
+			threadId: string;
+			createdAt: number;
+			params: CommandExecutionRequestApprovalParams;
+	  }
+	| {
+			requestId: number;
+			method: 'item/fileChange/requestApproval';
+			threadId: string;
+			createdAt: number;
+			params: FileChangeRequestApprovalParams;
+	  }
+	| {
+			requestId: number;
+			method: 'item/permissions/requestApproval';
+			threadId: string;
+			createdAt: number;
+			params: PermissionsRequestApprovalParams;
+	  }
+	| {
+			requestId: number;
+			method: 'item/tool/requestUserInput';
+			threadId: string;
+			createdAt: number;
+			params: ToolRequestUserInputParams;
+	  }
+	| {
+			requestId: number;
+			method: string;
+			threadId: string;
+			createdAt: number;
+			params: Record<string, unknown>;
+	  };
+
+export interface PendingServerRequestListResponse {
+	data: PendingServerRequest[];
+}
+
 export interface DirectoryEntry {
 	fileName: string;
 	isDirectory: boolean;

@@ -13,6 +13,8 @@ import type {
 	DirectoryListingResponse,
 	FileContentsResponse,
 	GatewayConfig,
+	ModelListResponse,
+	PendingServerRequest,
 	ProjectSummary,
 	SandboxMode
 } from './types';
@@ -89,6 +91,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			});
 		}
 
+		if (method === 'GET' && pathname === '/v1/models') {
+			await bridge.ensureReady();
+			return sendJson(response, 200, await listAllModels());
+		}
+
 		if (method === 'GET' && pathname === '/v1/threads') {
 			await bridge.ensureReady();
 			const projectPath = readOptionalString(url.searchParams.get('projectPath'));
@@ -158,6 +165,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			}
 
 			const threadId = decodeURIComponent(threadTurnsMatch[1]);
+			const model = readOptionalString(body.model);
+			const effort = readOptionalReasoningEffort(body.effort);
+			const collaborationMode = buildCollaborationMode(readOptionalMode(body.mode), model, effort);
 			const result = await bridge.request<Record<string, unknown>>('turn/start', {
 				threadId,
 				input: [
@@ -168,9 +178,40 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 					}
 				],
 				cwd: readOptionalString(body.cwd) ? bridge.resolvePath(readOptionalString(body.cwd)) : undefined,
-				model: readOptionalString(body.model)
+				model: collaborationMode ? undefined : model,
+				effort: collaborationMode ? undefined : effort,
+				approvalPolicy: readOptionalString(body.approvalPolicy) ?? undefined,
+				sandboxPolicy: buildSandboxPolicy(
+					readOptionalString(body.sandbox) ?? config.defaultSandboxMode
+				),
+				collaborationMode
 			});
 			return sendJson(response, 202, result);
+		}
+
+		const threadServerRequestsMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/server-requests$/);
+		if (method === 'GET' && threadServerRequestsMatch) {
+			await bridge.ensureReady();
+			const threadId = decodeURIComponent(threadServerRequestsMatch[1]);
+			return sendJson(response, 200, {
+				data: bridge.listPendingServerRequests(threadId)
+			});
+		}
+
+		const threadServerRequestResolveMatch = pathname.match(
+			/^\/v1\/threads\/([^/]+)\/server-requests\/([^/]+)\/resolve$/
+		);
+		if (method === 'POST' && threadServerRequestResolveMatch) {
+			await bridge.ensureReady();
+			const threadId = decodeURIComponent(threadServerRequestResolveMatch[1]);
+			const requestId = readRequestId(threadServerRequestResolveMatch[2]);
+			if (requestId === null) {
+				return sendJson(response, 400, { error: { message: 'requestId must be a number' } });
+			}
+
+			const body = await readJsonBody(request);
+			bridge.resolveServerRequest(threadId, requestId, body);
+			return sendJson(response, 200, { ok: true, threadId, requestId });
 		}
 
 		const threadInterruptMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/interrupt$/);
@@ -376,6 +417,23 @@ async function listAllThreads(options: {
 	return threads;
 }
 
+async function listAllModels(): Promise<ModelListResponse> {
+	const models: ModelListResponse['data'] = [];
+	let cursor: string | null = null;
+
+	do {
+		const page = await bridge.request<ModelListResponse>('model/list', {
+			limit: THREAD_PAGE_SIZE,
+			cursor,
+			includeHidden: false
+		});
+		models.push(...page.data);
+		cursor = page.nextCursor;
+	} while (cursor);
+
+	return { data: models, nextCursor: null };
+}
+
 function collectProjects(threadList: CodexThread[]): ProjectSummary[] {
 	const map = new Map<string, ProjectSummary>();
 
@@ -494,6 +552,70 @@ function readOptionalBoolean(value: unknown): boolean | null {
 	}
 
 	return null;
+}
+
+function readOptionalReasoningEffort(
+	value: unknown
+): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null {
+	switch (value) {
+		case 'none':
+		case 'minimal':
+		case 'low':
+		case 'medium':
+		case 'high':
+		case 'xhigh':
+			return value;
+		default:
+			return null;
+	}
+}
+
+function readOptionalMode(value: unknown): 'plan' | 'default' | null {
+	if (value === 'plan') {
+		return 'plan';
+	}
+
+	if (value === 'build' || value === 'default') {
+		return 'default';
+	}
+
+	return null;
+}
+
+function buildCollaborationMode(
+	mode: 'plan' | 'default' | null,
+	model: string | null,
+	effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+): Record<string, unknown> | undefined {
+	if (!mode || !model) {
+		return undefined;
+	}
+
+	return {
+		mode,
+		settings: {
+			model,
+			reasoning_effort: effort
+		}
+	};
+}
+
+function buildSandboxPolicy(mode: string | null): Record<string, unknown> | undefined {
+	switch (mode) {
+		case 'read-only':
+			return { type: 'readOnly' };
+		case 'workspace-write':
+			return { type: 'workspaceWrite' };
+		case 'danger-full-access':
+			return { type: 'dangerFullAccess' };
+		default:
+			return undefined;
+	}
+}
+
+function readRequestId(value: string): number | null {
+	const parsed = Number.parseInt(value, 10);
+	return Number.isNaN(parsed) ? null : parsed;
 }
 
 function parseBoolean(value: string | undefined): boolean {

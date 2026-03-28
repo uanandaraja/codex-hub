@@ -2,6 +2,8 @@ import { gatewayJson } from '$lib/server/gateway';
 import type {
 	CodexThread,
 	GatewayStatus,
+	ModelListResponse,
+	PendingServerRequestListResponse,
 	ProjectListResponse,
 	ThreadListResponse,
 	ThreadReadResponse
@@ -9,9 +11,10 @@ import type {
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url }) => {
-	const [statusResult, projectsResult] = await Promise.allSettled([
+	const [statusResult, projectsResult, modelsResult] = await Promise.allSettled([
 		gatewayJson<GatewayStatus>('/v1/status'),
-		gatewayJson<ProjectListResponse>('/v1/projects')
+		gatewayJson<ProjectListResponse>('/v1/projects'),
+		gatewayJson<ModelListResponse>('/v1/models')
 	]);
 
 	const requestedProjectPath = url.searchParams.get('project');
@@ -26,6 +29,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	let threadsError: string | null = null;
 	let initialThreadId: string | null = null;
 	let initialThread: CodexThread | null = null;
+	let pendingRequests: PendingServerRequestListResponse['data'] = [];
 
 	if (initialProjectPath) {
 		try {
@@ -55,13 +59,25 @@ export const load: PageServerLoad = async ({ url }) => {
 		} catch {
 			// Keep the page usable even if the thread read fails.
 		}
+
+		try {
+			pendingRequests = (
+				await gatewayJson<PendingServerRequestListResponse>(
+					`/v1/threads/${encodeURIComponent(initialThreadId)}/server-requests`
+				)
+			).data;
+		} catch {
+			// Keep the page usable even if the pending request read fails.
+		}
 	}
 
 	return {
 		status: statusResult.status === 'fulfilled' ? statusResult.value : null,
 		projects: projectsResult.status === 'fulfilled' ? projectsResult.value.data : [],
+		models: modelsResult.status === 'fulfilled' ? modelsResult.value.data : [],
 		threads,
 		initialThread,
+		initialPendingRequests: pendingRequests,
 		initialProjectPath,
 		initialThreadId,
 		errors: {
@@ -72,6 +88,10 @@ export const load: PageServerLoad = async ({ url }) => {
 			projects:
 				projectsResult.status === 'rejected'
 					? 'Project list could not be loaded. The server may not be ready yet.'
+					: null,
+			models:
+				modelsResult.status === 'rejected'
+					? 'Model list could not be loaded. Using fallback prompt settings.'
 					: null,
 			threads:
 				threadsError

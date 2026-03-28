@@ -1,7 +1,13 @@
 import { ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { resolve } from 'node:path';
 import { createInterface, Interface } from 'node:readline';
-import type { AppServerNotification, GatewayConfig, GatewayStatus, JsonRpcErrorPayload } from './types';
+import type {
+	AppServerNotification,
+	GatewayConfig,
+	GatewayStatus,
+	JsonRpcErrorPayload,
+	PendingServerRequest
+} from './types';
 
 type PendingRequest = {
 	method: string;
@@ -31,6 +37,7 @@ export class CodexAppServerBridge {
 	private readyPromise: Promise<void> | null = null;
 	private pending = new Map<number, PendingRequest>();
 	private subscribers = new Map<string, Set<NotificationListener>>();
+	private pendingServerRequests = new Map<number, PendingServerRequest>();
 	private warnings: string[] = [];
 	private recentStderr: string[] = [];
 	private state: GatewayStatus['state'] = 'starting';
@@ -101,6 +108,22 @@ export class CodexAppServerBridge {
 				this.subscribers.delete(threadId);
 			}
 		};
+	}
+
+	listPendingServerRequests(threadId: string): PendingServerRequest[] {
+		return [...this.pendingServerRequests.values()]
+			.filter((request) => request.threadId === threadId)
+			.sort((left, right) => left.createdAt - right.createdAt);
+	}
+
+	resolveServerRequest(threadId: string, requestId: number, result: unknown): void {
+		const pending = this.pendingServerRequests.get(requestId);
+		if (!pending || pending.threadId !== threadId) {
+			throw new Error(`server request ${requestId} was not found for thread ${threadId}`);
+		}
+
+		this.pendingServerRequests.delete(requestId);
+		this.sendResponse(requestId, result);
 	}
 
 	resolvePath(inputPath?: string | null): string {
@@ -206,19 +229,19 @@ export class CodexAppServerBridge {
 			this.recordError(JSON.stringify(notification.params ?? {}));
 		}
 
+		if (notification.method === 'serverRequest/resolved') {
+			const requestId = this.extractRequestId(notification.params);
+			if (requestId !== null) {
+				this.pendingServerRequests.delete(requestId);
+			}
+		}
+
 		const threadId = this.extractThreadId(notification.params);
 		if (!threadId) {
 			return;
 		}
 
-		const listeners = this.subscribers.get(threadId);
-		if (!listeners) {
-			return;
-		}
-
-		for (const listener of listeners) {
-			listener(notification);
-		}
+		this.emitThreadNotification(threadId, notification);
 	}
 
 	private handleServerRequest(payload: Record<string, unknown>): void {
@@ -234,6 +257,34 @@ export class CodexAppServerBridge {
 				this.sendResponse(id, { decision: 'accept' });
 				return;
 			}
+		}
+
+		const params =
+			payload.params && typeof payload.params === 'object'
+				? (payload.params as Record<string, unknown>)
+				: undefined;
+		const threadId = this.extractThreadId(params);
+		if (params && threadId && this.shouldQueueServerRequest(method)) {
+			const pending: PendingServerRequest = {
+				requestId: id,
+				method,
+				threadId,
+				createdAt: Date.now(),
+				params
+			};
+			this.pendingServerRequests.set(id, pending);
+			this.emitThreadNotification(threadId, {
+				method: 'serverRequest/pending',
+				params: {
+					threadId,
+					requestId: id,
+					request: {
+						method,
+						params
+					}
+				}
+			});
+			return;
 		}
 
 		this.sendError(id, -32601, `Unsupported server request: ${method}`);
@@ -260,6 +311,7 @@ export class CodexAppServerBridge {
 		this.stdout?.close();
 		this.stdout = null;
 		this.readyPromise = null;
+		this.pendingServerRequests.clear();
 		this.state = 'error';
 		this.recordError(String(error));
 
@@ -332,6 +384,30 @@ export class CodexAppServerBridge {
 		}
 
 		return null;
+	}
+
+	private extractRequestId(params?: Record<string, unknown>): number | null {
+		return typeof params?.requestId === 'number' ? params.requestId : null;
+	}
+
+	private emitThreadNotification(threadId: string, notification: AppServerNotification): void {
+		const listeners = this.subscribers.get(threadId);
+		if (!listeners) {
+			return;
+		}
+
+		for (const listener of listeners) {
+			listener(notification);
+		}
+	}
+
+	private shouldQueueServerRequest(method: string): boolean {
+		return (
+			method === 'item/commandExecution/requestApproval' ||
+			method === 'item/fileChange/requestApproval' ||
+			method === 'item/permissions/requestApproval' ||
+			method === 'item/tool/requestUserInput'
+		);
 	}
 
 	private pushUnique(target: string[], value: string, maxSize: number): void {

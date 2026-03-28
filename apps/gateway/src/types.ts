@@ -61,6 +61,35 @@ export interface ProjectListResponse {
 	data: ProjectSummary[];
 }
 
+export interface ModelReasoningEffortOption {
+	reasoningEffort: string;
+	description: string;
+}
+
+export interface ModelSummary {
+	id: string;
+	model: string;
+	displayName: string;
+	description: string;
+	hidden: boolean;
+	isDefault: boolean;
+	defaultReasoningEffort: string;
+	supportedReasoningEfforts: ModelReasoningEffortOption[];
+}
+
+export interface ModelListResponse {
+	data: ModelSummary[];
+	nextCursor: string | null;
+}
+
+export interface PendingServerRequest {
+	requestId: number;
+	method: string;
+	threadId: string;
+	createdAt: number;
+	params: Record<string, unknown>;
+}
+
 export interface CodexThreadItem {
 	type: string;
 	id: string;

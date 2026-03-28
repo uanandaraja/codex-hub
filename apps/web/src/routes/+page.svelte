@@ -3,6 +3,7 @@
 	import { ArrowsClockwiseIcon, ListIcon, PlusIcon } from 'phosphor-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
+	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
 	import type { PageData } from './$types';
 	import type {
@@ -10,11 +11,18 @@
 		CodexTurn,
 		CodexThreadItem,
 		GatewayStatus,
+		ModelSummary,
+		PendingServerRequest,
+		PendingServerRequestListResponse,
 		ProjectSummary,
 		RpcNotification,
 		ThreadReadResponse,
 		ThreadStartResponse
 	} from '$lib/types';
+
+	type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+	type PromptMode = 'build' | 'plan';
+	type PermissionPreset = 'ask' | 'auto' | 'full';
 
 	type RenderedConversationEntry = {
 		item: CodexThreadItem;
@@ -23,28 +31,41 @@
 		showStatusNote: boolean;
 	};
 
+	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
+
 	let { data } = $props<{ data: PageData }>();
 
 	const initialStatus = untrack(() => data.status);
+	const initialModels = untrack(() => sortModels(data.models));
 	const initialProjects = untrack(() => sortProjects(data.projects));
 	const initialThreads = untrack(() => sortThreads(data.threads));
 	const initialBanner = untrack(
-		() => data.errors.status ?? data.errors.projects ?? data.errors.threads ?? null
+		() => data.errors.status ?? data.errors.projects ?? data.errors.models ?? data.errors.threads ?? null
 	);
 	const initialProjectPath = untrack(() => data.initialProjectPath ?? initialProjects[0]?.path ?? null);
 	const initialThreadId = untrack(() => data.initialThreadId ?? resolveInitialThreadId(initialThreads));
 	const initialDetailedThread = untrack(() => data.initialThread ?? null);
+	const initialPendingRequests = untrack(() => data.initialPendingRequests ?? []);
 
 	let status = $state<GatewayStatus | null>(initialStatus);
+	let models = $state<ModelSummary[]>(initialModels);
 	let projects = $state<ProjectSummary[]>(initialProjects);
 	let threads = $state<CodexThread[]>(initialThreads);
 	let threadDetails = $state<Record<string, CodexThread>>(
 		initialDetailedThread ? { [initialDetailedThread.id]: initialDetailedThread } : {}
 	);
+	let pendingRequestsByThread = $state<Record<string, PendingServerRequest[]>>(
+		initialThreadId ? { [initialThreadId]: initialPendingRequests } : {}
+	);
 	let selectedProjectPath = $state<string | null>(initialProjectPath);
 	let selectedThreadId = $state<string | null>(initialThreadId);
+	let selectedModel = $state<string | null>(resolveInitialModel(initialModels));
+	let selectedEffort = $state<ReasoningEffort | null>(resolveInitialEffort(initialModels));
+	let selectedMode = $state<PromptMode>('build');
+	let selectedPermissionPreset = $state<PermissionPreset>('ask');
 	let creatingThread = $state(false);
 	let refreshingWorkspace = $state(false);
+	let resolvingRequestId = $state<number | null>(null);
 	let banner = $state<string | null>(initialBanner);
 	let composer = $state('');
 	let activeTurnId = $state<string | null>(null);
@@ -70,6 +91,18 @@
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
+	const selectedModelSummary = $derived.by<ModelSummary | null>(
+		() => models.find((model) => model.model === selectedModel) ?? null
+	);
+	const availableEfforts = $derived.by<ReasoningEffort[]>(() => {
+		const model = selectedModelSummary;
+		if (!model) {
+			return ['medium'];
+		}
+
+		return model.supportedReasoningEfforts.map((option) => option.reasoningEffort);
+	});
+	const permissionPresetConfig = $derived.by(() => resolvePermissionPreset(selectedPermissionPreset));
 
 	const projectThreads = $derived.by<CodexThread[]>(() => sortThreads(threads));
 
@@ -92,6 +125,9 @@
 	);
 	const isOpeningThread = $derived.by(
 		() => selectedThreadId !== null && selectedThreadSummary !== null && currentThread === null
+	);
+	const activePendingRequests = $derived.by<PendingServerRequest[]>(() =>
+		selectedThreadId ? (pendingRequestsByThread[selectedThreadId] ?? []) : []
 	);
 
 	const renderedConversationEntries = $derived.by<RenderedConversationEntry[]>(() =>
@@ -128,6 +164,23 @@
 	});
 
 	$effect(() => {
+		if (!selectedModel && models[0]) {
+			selectedModel = resolveInitialModel(models);
+		}
+	});
+
+	$effect(() => {
+		const model = selectedModelSummary;
+		if (!model) {
+			return;
+		}
+
+		if (!selectedEffort || !availableEfforts.includes(selectedEffort)) {
+			selectedEffort = model.defaultReasoningEffort;
+		}
+	});
+
+	$effect(() => {
 		if (!selectedProjectPath) {
 			selectedThreadId = null;
 			return;
@@ -142,6 +195,7 @@
 
 	onMount(() => {
 		hasMounted = true;
+		restorePromptPreferences();
 		const mediaQuery = window.matchMedia('(min-width: 821px)');
 		const syncViewport = (matches: boolean) => {
 			isDesktopViewport = matches;
@@ -159,6 +213,10 @@
 			void ensureThreadReady(selectedThreadId);
 		} else if (selectedProjectPath) {
 			void loadProjectThreads(selectedProjectPath);
+		}
+
+		if (models.length === 0) {
+			void refreshModels();
 		}
 
 		return () => {
@@ -196,6 +254,14 @@
 	});
 
 	$effect(() => {
+		if (!hasMounted) {
+			return;
+		}
+
+		persistPromptPreferences();
+	});
+
+	$effect(() => {
 		if (selectedThreadId || !hasMounted) {
 			return;
 		}
@@ -221,12 +287,14 @@
 	async function refreshWorkspace(): Promise<void> {
 		refreshingWorkspace = true;
 		try {
-			const [nextStatus, nextProjectsResult] = await Promise.all([
+			const [nextStatus, nextProjectsResult, nextModelsResult] = await Promise.all([
 				api<GatewayStatus>('/api/status'),
-				api<{ data: ProjectSummary[] }>('/api/projects')
+				api<{ data: ProjectSummary[] }>('/api/projects'),
+				api<{ data: ModelSummary[]; nextCursor: string | null }>('/api/models')
 			]);
 
 			status = nextStatus;
+			models = sortModels(nextModelsResult.data);
 			const nextProjects = sortProjects(nextProjectsResult.data);
 			projects = nextProjects;
 
@@ -272,7 +340,7 @@
 				},
 				body: JSON.stringify({})
 			});
-			await fetchThread(threadId);
+			await Promise.all([fetchThread(threadId), fetchPendingRequests(threadId)]);
 			banner = null;
 		} catch (error) {
 			banner = error instanceof Error ? error.message : 'Failed to open chat.';
@@ -305,6 +373,25 @@
 				: nextThreads[0]?.id ?? null;
 		projects = syncProjectSummary(projects, projectPath, nextThreads);
 		return nextThreads;
+	}
+
+	async function refreshModels(): Promise<void> {
+		try {
+			const result = await api<{ data: ModelSummary[]; nextCursor: string | null }>('/api/models');
+			models = sortModels(result.data);
+		} catch (error) {
+			banner = error instanceof Error ? error.message : 'Failed to load models.';
+		}
+	}
+
+	async function fetchPendingRequests(threadId: string): Promise<void> {
+		const result = await api<PendingServerRequestListResponse>(
+			`/api/threads/${encodeURIComponent(threadId)}/requests`
+		);
+		pendingRequestsByThread = {
+			...pendingRequestsByThread,
+			[threadId]: sortPendingRequests(result.data)
+		};
 	}
 
 	async function selectProject(projectPath: string): Promise<void> {
@@ -356,7 +443,10 @@
 				},
 				body: JSON.stringify({
 					cwd: projectPath,
-					name: generatedName
+					name: generatedName,
+					model: selectedModelSummary?.model ?? undefined,
+					approvalPolicy: permissionPresetConfig.approvalPolicy,
+					sandbox: permissionPresetConfig.sandbox
 				})
 			});
 
@@ -368,6 +458,10 @@
 			selectedProjectPath = projectPath;
 			selectedThreadId = result.thread.id;
 			projects = insertProjectSummary(projects, projectPath, result.thread);
+			pendingRequestsByThread = {
+				...pendingRequestsByThread,
+				[result.thread.id]: []
+			};
 			await ensureThreadEvents(result.thread.id);
 			banner = null;
 
@@ -419,7 +513,14 @@
 				headers: {
 					'content-type': 'application/json'
 				},
-				body: JSON.stringify({ message })
+				body: JSON.stringify({
+					message,
+					model: selectedModelSummary?.model ?? undefined,
+					effort: selectedEffort,
+					mode: selectedMode,
+					approvalPolicy: permissionPresetConfig.approvalPolicy,
+					sandbox: permissionPresetConfig.sandbox
+				})
 			});
 
 			if (generatedName) {
@@ -484,9 +585,54 @@
 		}
 	}
 
+	async function resolvePendingRequest(
+		threadId: string,
+		requestId: number,
+		payload: unknown
+	): Promise<void> {
+		const previous = pendingRequestsByThread[threadId] ?? [];
+		resolvingRequestId = requestId;
+		removePendingRequest(threadId, requestId);
+
+		try {
+			await api(`/api/threads/${encodeURIComponent(threadId)}/requests/${requestId}/resolve`, {
+				method: 'POST',
+				headers: {
+					'content-type': 'application/json'
+				},
+				body: JSON.stringify(payload)
+			});
+			banner = null;
+		} catch (error) {
+			pendingRequestsByThread = {
+				...pendingRequestsByThread,
+				[threadId]: previous
+			};
+			banner = error instanceof Error ? error.message : 'Failed to resolve request.';
+		} finally {
+			resolvingRequestId = null;
+		}
+	}
+
 	function handleNotification(notification: RpcNotification): void {
 		const threadId = readThreadId(notification);
 		if (!threadId || threadId !== selectedThreadId) {
+			return;
+		}
+
+		if (notification.method === 'serverRequest/pending') {
+			const pendingRequest = readPendingServerRequest(notification.params);
+			if (pendingRequest) {
+				upsertPendingRequest(threadId, pendingRequest);
+			}
+			return;
+		}
+
+		if (notification.method === 'serverRequest/resolved') {
+			const requestId = readRequestIdValue(notification.params?.requestId);
+			if (requestId !== null) {
+				removePendingRequest(threadId, requestId);
+			}
 			return;
 		}
 
@@ -627,6 +773,10 @@
 		return readString(turn.id);
 	}
 
+	function readRequestIdValue(value: unknown): number | null {
+		return typeof value === 'number' ? value : null;
+	}
+
 	function readTurnStatus(params?: Record<string, unknown>): string | null {
 		const turn = params?.turn;
 		if (!turn || typeof turn !== 'object' || !('status' in turn)) {
@@ -647,6 +797,33 @@
 		}
 
 		return item as CodexThreadItem;
+	}
+
+	function readPendingServerRequest(params?: Record<string, unknown>): PendingServerRequest | null {
+		const requestId = readRequestIdValue(params?.requestId);
+		const request = params?.request;
+		if (!requestId || !request || typeof request !== 'object') {
+			return null;
+		}
+
+		const requestRecord = request as Record<string, unknown>;
+		const method = readString(requestRecord.method);
+		const requestParams =
+			requestRecord.params && typeof requestRecord.params === 'object'
+				? (requestRecord.params as Record<string, unknown>)
+				: null;
+
+		if (!method || !requestParams) {
+			return null;
+		}
+
+		return {
+			requestId,
+			method,
+			threadId: readString(params?.threadId) ?? '',
+			createdAt: Date.now(),
+			params: requestParams
+		} as PendingServerRequest;
 	}
 
 	function resolveInitialThreadId(initialThreadsList: CodexThread[]): string | null {
@@ -722,6 +899,109 @@
 
 			return left.name.localeCompare(right.name);
 		});
+	}
+
+	function sortModels(list: ModelSummary[]): ModelSummary[] {
+		return [...list].sort((left, right) => {
+			if (left.isDefault !== right.isDefault) {
+				return left.isDefault ? -1 : 1;
+			}
+
+			return left.displayName.localeCompare(right.displayName);
+		});
+	}
+
+	function sortPendingRequests(list: PendingServerRequest[]): PendingServerRequest[] {
+		return [...list].sort((left, right) => left.createdAt - right.createdAt);
+	}
+
+	function resolveInitialModel(list: ModelSummary[]): string | null {
+		return list.find((model) => model.isDefault)?.model ?? list[0]?.model ?? null;
+	}
+
+	function resolveInitialEffort(list: ModelSummary[]): ReasoningEffort | null {
+		return list.find((model) => model.isDefault)?.defaultReasoningEffort ?? list[0]?.defaultReasoningEffort ?? null;
+	}
+
+	function resolvePermissionPreset(
+		preset: PermissionPreset
+	): { approvalPolicy: 'on-request' | 'never'; sandbox: 'workspace-write' | 'danger-full-access' } {
+		switch (preset) {
+			case 'auto':
+				return { approvalPolicy: 'never', sandbox: 'workspace-write' };
+			case 'full':
+				return { approvalPolicy: 'never', sandbox: 'danger-full-access' };
+			case 'ask':
+			default:
+				return { approvalPolicy: 'on-request', sandbox: 'workspace-write' };
+		}
+	}
+
+	function upsertPendingRequest(threadId: string, request: PendingServerRequest): void {
+		const current = pendingRequestsByThread[threadId] ?? [];
+		const next = current.filter((entry) => entry.requestId !== request.requestId);
+		pendingRequestsByThread = {
+			...pendingRequestsByThread,
+			[threadId]: sortPendingRequests([...next, request])
+		};
+	}
+
+	function removePendingRequest(threadId: string, requestId: number): void {
+		const current = pendingRequestsByThread[threadId] ?? [];
+		pendingRequestsByThread = {
+			...pendingRequestsByThread,
+			[threadId]: current.filter((entry) => entry.requestId !== requestId)
+		};
+	}
+
+	function restorePromptPreferences(): void {
+		try {
+			const raw = window.localStorage.getItem(PROMPT_PREFERENCES_KEY);
+			if (!raw) {
+				return;
+			}
+
+			const parsed = JSON.parse(raw) as {
+				model?: string;
+				effort?: ReasoningEffort;
+				mode?: PromptMode;
+				permissionPreset?: PermissionPreset;
+			};
+
+			if (typeof parsed.model === 'string') {
+				selectedModel = parsed.model;
+			}
+
+			if (parsed.effort) {
+				selectedEffort = parsed.effort;
+			}
+
+			if (parsed.mode === 'build' || parsed.mode === 'plan') {
+				selectedMode = parsed.mode;
+			}
+
+			if (
+				parsed.permissionPreset === 'ask' ||
+				parsed.permissionPreset === 'auto' ||
+				parsed.permissionPreset === 'full'
+			) {
+				selectedPermissionPreset = parsed.permissionPreset;
+			}
+		} catch {
+			// ignore malformed saved prompt preferences
+		}
+	}
+
+	function persistPromptPreferences(): void {
+		window.localStorage.setItem(
+			PROMPT_PREFERENCES_KEY,
+			JSON.stringify({
+				model: selectedModel,
+				effort: selectedEffort,
+				mode: selectedMode,
+				permissionPreset: selectedPermissionPreset
+			})
+		);
 	}
 
 	function syncProjectSummary(
@@ -1443,8 +1723,25 @@
 		<footer class="relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4">
 			<div class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(9,10,12,0),rgba(9,10,12,0.56)_42%,rgba(9,10,12,0.92)_100%)] backdrop-blur-[10px]"></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
+				{#if activePendingRequests.length > 0}
+					<div class="mb-3 grid gap-3">
+						{#each activePendingRequests as request (request.requestId)}
+							<ServerRequestPanel
+								{request}
+								resolving={resolvingRequestId === request.requestId}
+								onresolve={(payload) => void resolvePendingRequest(request.threadId, request.requestId, payload)}
+							/>
+						{/each}
+					</div>
+				{/if}
+
 				<PromptInput
 					bind:value={composer}
+					bind:selectedModel
+					bind:selectedEffort
+					bind:selectedMode
+					bind:selectedPermissionPreset
+					{models}
 					placeholder="enter your message"
 					disabled={!selectedProjectPath}
 					isStreaming={activeTurnId !== null}
