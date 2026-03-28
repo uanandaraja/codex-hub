@@ -1,5 +1,11 @@
 import { gatewayJson } from '$lib/server/gateway';
-import type { GatewayStatus, ProjectListResponse, ThreadListResponse } from '$lib/types';
+import type {
+	CodexThread,
+	GatewayStatus,
+	ProjectListResponse,
+	ThreadListResponse,
+	ThreadReadResponse
+} from '$lib/types';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ url }) => {
@@ -19,6 +25,7 @@ export const load: PageServerLoad = async ({ url }) => {
 	let threads: ThreadListResponse['data'] = [];
 	let threadsError: string | null = null;
 	let initialThreadId: string | null = null;
+	let initialThread: CodexThread | null = null;
 
 	if (initialProjectPath) {
 		try {
@@ -38,10 +45,23 @@ export const load: PageServerLoad = async ({ url }) => {
 		initialThreadId = threads[0]?.id ?? null;
 	}
 
+	if (initialThreadId) {
+		try {
+			initialThread = (
+				await gatewayJson<ThreadReadResponse>(
+					`/v1/threads/${encodeURIComponent(initialThreadId)}?includeTurns=true`
+				)
+			).thread;
+		} catch {
+			// Keep the page usable even if the thread read fails.
+		}
+	}
+
 	return {
 		status: statusResult.status === 'fulfilled' ? statusResult.value : null,
 		projects: projectsResult.status === 'fulfilled' ? projectsResult.value.data : [],
 		threads,
+		initialThread,
 		initialProjectPath,
 		initialThreadId,
 		errors: {

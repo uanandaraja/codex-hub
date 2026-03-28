@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { ArrowUpIcon } from 'phosphor-svelte';
+	import { ArrowUpIcon, SpinnerGapIcon } from 'phosphor-svelte';
 
 	let {
 		placeholder = 'message',
@@ -72,7 +72,7 @@
 	tabindex="-1"
 	onclick={focusTextarea}
 	onkeydown={(event) => event.key === 'Enter' && focusTextarea()}
-	class="relative w-full cursor-text border border-line bg-surface-1 transition-[border-color,background-color] duration-150 hover:border-accent focus-within:border-accent"
+	class="relative w-full cursor-text border border-line bg-surface-1 transition-[background-color] duration-150 focus-within:bg-surface-1"
 	class:opacity-50={isDisabled}
 >
 	<textarea
@@ -83,7 +83,7 @@
 		{placeholder}
 		rows={1}
 		disabled={isDisabled}
-		class="min-h-[104px] max-h-48 w-full resize-none overflow-y-auto bg-transparent px-5 pt-5 pb-14 text-[16px] leading-relaxed text-fg outline-none placeholder:text-muted disabled:cursor-not-allowed min-[821px]:text-[14px]"
+		class="min-h-[96px] max-h-48 w-full resize-none overflow-y-auto bg-transparent px-4 pt-4 pb-12 text-[16px] leading-relaxed text-fg outline-none placeholder:text-muted disabled:cursor-not-allowed min-[821px]:text-[14px]"
 	></textarea>
 
 	<button
@@ -91,10 +91,10 @@
 		aria-label="Send message"
 		onclick={() => void handleSubmit()}
 		disabled={!value.trim() || isDisabled}
-		class="absolute right-2 bottom-2 inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-0 text-fg transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+		class="absolute right-2 bottom-2 inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-0 text-fg transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
 	>
 		{#if isLoading}
-			<span class="h-4 w-4 animate-spin border border-muted border-t-fg"></span>
+			<SpinnerGapIcon size={16} class="animate-spin" />
 		{:else}
 			<ArrowUpIcon size={16} />
 		{/if}

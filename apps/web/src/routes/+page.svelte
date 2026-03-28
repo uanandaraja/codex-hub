@@ -25,11 +25,14 @@
 	);
 	const initialProjectPath = untrack(() => data.initialProjectPath ?? initialProjects[0]?.path ?? null);
 	const initialThreadId = untrack(() => data.initialThreadId ?? resolveInitialThreadId(initialThreads));
+	const initialDetailedThread = untrack(() => data.initialThread ?? null);
 
 	let status = $state<GatewayStatus | null>(initialStatus);
 	let projects = $state<ProjectSummary[]>(initialProjects);
 	let threads = $state<CodexThread[]>(initialThreads);
-	let threadDetails = $state<Record<string, CodexThread>>({});
+	let threadDetails = $state<Record<string, CodexThread>>(
+		initialDetailedThread ? { [initialDetailedThread.id]: initialDetailedThread } : {}
+	);
 	let selectedProjectPath = $state<string | null>(initialProjectPath);
 	let selectedThreadId = $state<string | null>(initialThreadId);
 	let creatingThread = $state(false);
@@ -54,6 +57,8 @@
 		'grid w-full min-w-0 grid-cols-1 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-3 pl-[1.85rem] text-left text-fg';
 	const activityRowClass =
 		'mb-3 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[14px] leading-[1.6] text-muted';
+	const commandRowClass =
+		'mb-3 flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1 text-[12px] leading-[1.6] text-muted';
 
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
@@ -1275,9 +1280,9 @@
 								streaming={activeTurnId !== null && item.phase === 'streaming'}
 							/>
 						{:else if isCommandExecutionItem(item)}
-							<p class={activityRowClass}>
+							<p class={commandRowClass}>
 								<span class="shrink-0">{summarizeCommand(item)}</span>
-								<code class="min-w-0 break-words font-mono text-[14px] text-fg [overflow-wrap:anywhere]">
+								<code class="min-w-0 break-words font-mono text-[12px] text-fg [overflow-wrap:anywhere]">
 									{item.command}
 								</code>
 							</p>

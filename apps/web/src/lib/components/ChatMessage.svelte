@@ -17,7 +17,7 @@
 </script>
 
 {#if isUser}
-	<article class="mb-4 w-full max-w-[80%] border border-line bg-[rgba(137,180,250,0.08)] px-[1.1rem] py-4">
+	<article class="mb-4 w-full border border-line bg-[rgba(137,180,250,0.08)] px-[1.1rem] py-4">
 		<pre class="m-0 whitespace-pre-wrap break-words font-sans [overflow-wrap:anywhere] text-[14px] leading-[1.7] text-fg">{content}</pre>
 	</article>
 {:else}
