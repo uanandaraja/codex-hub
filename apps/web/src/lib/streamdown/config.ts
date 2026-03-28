@@ -108,13 +108,13 @@ export const streamdownTheme = {
 		base: 'mb-2 mt-4 text-[14px] font-semibold uppercase tracking-[0.08em] text-muted'
 	},
 	ul: {
-		base: 'my-4 list-disc space-y-2 pl-6 text-[14px] leading-[1.7] text-fg'
+		base: 'my-4 list-disc space-y-2 pl-3 text-[14px] leading-[1.7] text-fg'
 	},
 	ol: {
-		base: 'my-4 list-decimal space-y-2 pl-6 text-[14px] leading-[1.7] text-fg'
+		base: 'my-4 list-decimal space-y-2 pl-3 text-[14px] leading-[1.7] text-fg'
 	},
 	li: {
-		base: 'leading-[1.7]'
+		base: 'leading-[1.7] marker:text-muted'
 	},
 	blockquote: {
 		base: 'my-4 border-l-2 border-line pl-4 text-[14px] leading-[1.7] text-muted'

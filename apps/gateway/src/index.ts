@@ -422,7 +422,7 @@ async function listAllModels(): Promise<ModelListResponse> {
 	let cursor: string | null = null;
 
 	do {
-		const page = await bridge.request<ModelListResponse>('model/list', {
+		const page: ModelListResponse = await bridge.request<ModelListResponse>('model/list', {
 			limit: THREAD_PAGE_SIZE,
 			cursor,
 			includeHidden: false

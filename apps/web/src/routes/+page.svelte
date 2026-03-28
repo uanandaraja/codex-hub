@@ -32,6 +32,7 @@
 	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
+	const THREAD_PERMISSION_PRESETS_KEY = 'codex-hub.thread-permission-presets';
 
 	let { data } = $props<{ data: PageData }>();
 
@@ -62,7 +63,9 @@
 	let selectedModel = $state<string | null>(resolveInitialModel(initialModels));
 	let selectedEffort = $state<ReasoningEffort | null>(resolveInitialEffort(initialModels));
 	let selectedMode = $state<PromptMode>('build');
-	let selectedPermissionPreset = $state<PermissionPreset>('ask');
+	let draftPermissionPreset = $state<PermissionPreset>('full');
+	let threadPermissionPresets = $state<Record<string, PermissionPreset>>({});
+	let selectedPermissionPreset = $state<PermissionPreset>('full');
 	let creatingThread = $state(false);
 	let refreshingWorkspace = $state(false);
 	let resolvingRequestId = $state<number | null>(null);
@@ -78,6 +81,7 @@
 	let isDesktopViewport = false;
 	let hasMounted = false;
 	let optimisticTurnCounter = 0;
+	let syncedPermissionThreadId: string | null | undefined = undefined;
 	let eventSource = $state<EventSource | null>(null);
 	let subscribedThreadId = $state<string | null>(null);
 	let threadEventsReady = $state<Promise<void> | null>(null);
@@ -193,9 +197,50 @@
 		selectedThreadId = projectThreads[0]?.id ?? null;
 	});
 
+	$effect(() => {
+		if (selectedThreadId === syncedPermissionThreadId) {
+			return;
+		}
+
+		syncedPermissionThreadId = selectedThreadId;
+		selectedPermissionPreset = permissionPresetForThread(selectedThreadId);
+	});
+
+	$effect(() => {
+		if (!selectedThreadId) {
+			if (draftPermissionPreset !== selectedPermissionPreset) {
+				draftPermissionPreset = selectedPermissionPreset;
+			}
+			return;
+		}
+
+		if (selectedPermissionPreset === 'full') {
+			if (!(selectedThreadId in threadPermissionPresets)) {
+				return;
+			}
+
+			const next = { ...threadPermissionPresets };
+			delete next[selectedThreadId];
+			threadPermissionPresets = next;
+			return;
+		}
+
+		if (threadPermissionPresets[selectedThreadId] === selectedPermissionPreset) {
+			return;
+		}
+
+		threadPermissionPresets = {
+			...threadPermissionPresets,
+			[selectedThreadId]: selectedPermissionPreset
+		};
+	});
+
 	onMount(() => {
-		hasMounted = true;
 		restorePromptPreferences();
+		restoreThreadPermissionPresets();
+		syncedPermissionThreadId = undefined;
+		selectedPermissionPreset = permissionPresetForThread(selectedThreadId);
+		hasMounted = true;
 		const mediaQuery = window.matchMedia('(min-width: 821px)');
 		const syncViewport = (matches: boolean) => {
 			isDesktopViewport = matches;
@@ -259,6 +304,14 @@
 		}
 
 		persistPromptPreferences();
+	});
+
+	$effect(() => {
+		if (!hasMounted) {
+			return;
+		}
+
+		persistThreadPermissionPresets();
 	});
 
 	$effect(() => {
@@ -455,6 +508,12 @@
 				...threadDetails,
 				[result.thread.id]: result.thread
 			};
+			if (selectedPermissionPreset !== 'full') {
+				threadPermissionPresets = {
+					...threadPermissionPresets,
+					[result.thread.id]: selectedPermissionPreset
+				};
+			}
 			selectedProjectPath = projectPath;
 			selectedThreadId = result.thread.id;
 			projects = insertProjectSummary(projects, projectPath, result.thread);
@@ -937,6 +996,18 @@
 		}
 	}
 
+	function permissionPresetForThread(threadId: string | null): PermissionPreset {
+		if (!threadId) {
+			return draftPermissionPreset;
+		}
+
+		return threadPermissionPresets[threadId] ?? 'full';
+	}
+
+	function isPermissionPreset(value: unknown): value is PermissionPreset {
+		return value === 'ask' || value === 'auto' || value === 'full';
+	}
+
 	function upsertPendingRequest(threadId: string, request: PendingServerRequest): void {
 		const current = pendingRequestsByThread[threadId] ?? [];
 		const next = current.filter((entry) => entry.requestId !== request.requestId);
@@ -965,7 +1036,6 @@
 				model?: string;
 				effort?: ReasoningEffort;
 				mode?: PromptMode;
-				permissionPreset?: PermissionPreset;
 			};
 
 			if (typeof parsed.model === 'string') {
@@ -979,14 +1049,6 @@
 			if (parsed.mode === 'build' || parsed.mode === 'plan') {
 				selectedMode = parsed.mode;
 			}
-
-			if (
-				parsed.permissionPreset === 'ask' ||
-				parsed.permissionPreset === 'auto' ||
-				parsed.permissionPreset === 'full'
-			) {
-				selectedPermissionPreset = parsed.permissionPreset;
-			}
 		} catch {
 			// ignore malformed saved prompt preferences
 		}
@@ -998,9 +1060,40 @@
 			JSON.stringify({
 				model: selectedModel,
 				effort: selectedEffort,
-				mode: selectedMode,
-				permissionPreset: selectedPermissionPreset
+				mode: selectedMode
 			})
+		);
+	}
+
+	function restoreThreadPermissionPresets(): void {
+		try {
+			const raw = window.localStorage.getItem(THREAD_PERMISSION_PRESETS_KEY);
+			if (!raw) {
+				return;
+			}
+
+			const parsed = JSON.parse(raw);
+			if (!parsed || typeof parsed !== 'object') {
+				return;
+			}
+
+			const nextPresets: Record<string, PermissionPreset> = {};
+			for (const [threadId, preset] of Object.entries(parsed)) {
+				if (threadId && isPermissionPreset(preset) && preset !== 'full') {
+					nextPresets[threadId] = preset;
+				}
+			}
+
+			threadPermissionPresets = nextPresets;
+		} catch {
+			// ignore malformed saved thread permission presets
+		}
+	}
+
+	function persistThreadPermissionPresets(): void {
+		window.localStorage.setItem(
+			THREAD_PERMISSION_PRESETS_KEY,
+			JSON.stringify(threadPermissionPresets)
 		);
 	}
 

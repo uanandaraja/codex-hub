@@ -89,4 +89,10 @@
 		border: 1px solid var(--color-line);
 		color: var(--color-fg);
 	}
+
+	[data-streamdown-li] > [data-streamdown-ul],
+	[data-streamdown-li] > [data-streamdown-ol] {
+		margin-top: 0.35rem;
+		padding-inline-start: 0.7rem;
+	}
 }
