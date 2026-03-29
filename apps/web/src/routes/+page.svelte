@@ -80,6 +80,7 @@
 	let resolvingRequestId = $state<number | null>(null);
 	let banner = $state<string | null>(initialBanner);
 	let composer = $state('');
+	let notificationPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
 	let activeTurnId = $state<string | null>(null);
 	let activeTurnStartedAt = $state<number | null>(null);
 	let interruptingTurn = $state(false);
@@ -94,6 +95,8 @@
 	let eventSource = $state<EventSource | null>(null);
 	let subscribedThreadId = $state<string | null>(null);
 	let threadEventsReady = $state<Promise<void> | null>(null);
+	let notifiedRequestIds = $state<Record<string, true>>({});
+	let notifiedTurnEvents = $state<Record<string, true>>({});
 
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
@@ -256,6 +259,8 @@
 	onMount(() => {
 		restorePromptPreferences();
 		restoreThreadPermissionPresets();
+		syncNotificationPermission();
+		void ensureBrowserNotificationPermission();
 		syncedPermissionThreadId = undefined;
 		selectedPermissionPreset = permissionPresetForThread(selectedThreadId);
 		hasMounted = true;
@@ -742,6 +747,7 @@
 			const pendingRequest = readPendingServerRequest(notification.params);
 			if (pendingRequest) {
 				upsertPendingRequest(threadId, pendingRequest);
+				maybeNotifyPendingRequest(threadId, pendingRequest);
 			}
 			return;
 		}
@@ -797,6 +803,7 @@
 						[turnId]: activeTurnElapsedSeconds
 					};
 				}
+				maybeNotifyTurnEvent(threadId, turnId, turnStatus);
 			}
 			void finalizeTurn(threadId);
 			return;
@@ -863,6 +870,121 @@
 
 	function readErrorMessage(value: unknown): string {
 		return typeof value === 'string' ? value : 'Unknown error';
+	}
+
+	function notificationSupported(): boolean {
+		return typeof window !== 'undefined' && 'Notification' in window;
+	}
+
+	function syncNotificationPermission(): void {
+		if (!notificationSupported()) {
+			notificationPermission = 'unsupported';
+			return;
+		}
+
+		notificationPermission = Notification.permission;
+	}
+
+	async function ensureBrowserNotificationPermission(): Promise<void> {
+		if (!notificationSupported()) {
+			return;
+		}
+
+		syncNotificationPermission();
+		if (notificationPermission !== 'default') {
+			return;
+		}
+
+		notificationPermission = await Notification.requestPermission();
+		if (notificationPermission === 'denied') {
+			banner = 'Browser notifications are blocked for this app.';
+		}
+	}
+
+	function shouldSendBrowserNotification(): boolean {
+		if (notificationPermission !== 'granted') {
+			return false;
+		}
+
+		return document.visibilityState !== 'visible' || !document.hasFocus();
+	}
+
+	function notifyBrowser(title: string, body: string, tag: string): void {
+		if (!shouldSendBrowserNotification()) {
+			return;
+		}
+
+		const notification = new Notification(title, {
+			body,
+			tag,
+			silent: false
+		});
+
+		notification.onclick = () => {
+			window.focus();
+			notification.close();
+		};
+	}
+
+	function threadNotificationLabel(threadId: string): string {
+		const thread = threadDetails[threadId] ?? threads.find((entry) => entry.id === threadId) ?? null;
+		return thread ? chatLabel(thread) : 'current chat';
+	}
+
+	function maybeNotifyPendingRequest(threadId: string, request: PendingServerRequest): void {
+		const requestKey = `${threadId}:${request.requestId}`;
+		if (notifiedRequestIds[requestKey]) {
+			return;
+		}
+
+		notifiedRequestIds = {
+			...notifiedRequestIds,
+			[requestKey]: true
+		};
+
+		const threadLabel = threadNotificationLabel(threadId);
+		if (request.method === 'item/tool/requestUserInput') {
+			notifyBrowser('Follow-up needed', `${threadLabel} is waiting for your answer.`, requestKey);
+			return;
+		}
+
+		if (
+			request.method === 'item/commandExecution/requestApproval' ||
+			request.method === 'item/fileChange/requestApproval' ||
+			request.method === 'item/permissions/requestApproval'
+		) {
+			notifyBrowser('Approval needed', `${threadLabel} is waiting for confirmation.`, requestKey);
+			return;
+		}
+
+		notifyBrowser('Action needed', `${threadLabel} is waiting for your input.`, requestKey);
+	}
+
+	function maybeNotifyTurnEvent(threadId: string, turnId: string, turnStatus: string): void {
+		const eventKey = `${threadId}:${turnId}:${turnStatus}`;
+		if (notifiedTurnEvents[eventKey]) {
+			return;
+		}
+
+		notifiedTurnEvents = {
+			...notifiedTurnEvents,
+			[eventKey]: true
+		};
+
+		const threadLabel = threadNotificationLabel(threadId);
+		if (turnStatus === 'completed') {
+			notifyBrowser('Assistant finished', `${threadLabel} has a new reply ready.`, eventKey);
+			return;
+		}
+
+		if (turnStatus === 'interrupted') {
+			notifyBrowser('Assistant interrupted', `${threadLabel} stopped before finishing.`, eventKey);
+			return;
+		}
+
+		if (turnStatus === 'failed' || turnStatus === 'error') {
+			notifyBrowser('Assistant needs attention', `${threadLabel} ended with an error.`, eventKey);
+		}
 	}
 
 	function readString(value: unknown): string | null {

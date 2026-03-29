@@ -1,5 +1,10 @@
 <script lang="ts">
-	import { ArrowUpIcon, GearSixIcon, SpinnerGapIcon, StopIcon } from 'phosphor-svelte';
+	import {
+		ArrowUpIcon,
+		GearSixIcon,
+		SpinnerGapIcon,
+		StopIcon
+	} from 'phosphor-svelte';
 	import { Popover } from 'bits-ui';
 	import type { ModelSummary } from '$lib/types';
 	import AppSelect, { type AppSelectOption } from '$lib/components/ui/AppSelect.svelte';
