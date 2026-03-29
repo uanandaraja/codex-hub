@@ -36,6 +36,7 @@
 	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
+	const DESKTOP_SIDEBAR_OPEN_KEY = 'codex-hub.desktop-sidebar-open';
 	const THREAD_PERMISSION_PRESETS_KEY = 'codex-hub.thread-permission-presets';
 	const THREAD_NAME_BACKFILL_KEY = 'codex-hub.thread-name-backfill-v2';
 
@@ -90,6 +91,7 @@
 	let conversationBody = $state<HTMLElement | null>(null);
 	let sidebarOpen = $state(false);
 	let isDesktopViewport = false;
+	let desktopSidebarPreference: boolean | null = null;
 	let hasMounted = false;
 	let optimisticTurnCounter = 0;
 	let syncedPermissionThreadId: string | null | undefined = undefined;
@@ -260,6 +262,7 @@
 	onMount(() => {
 		restorePromptPreferences();
 		restoreThreadPermissionPresets();
+		restoreDesktopSidebarPreference();
 		syncNotificationPermission();
 		void ensureBrowserNotificationPermission();
 		void refreshStatusSnapshot();
@@ -269,7 +272,7 @@
 		const mediaQuery = window.matchMedia('(min-width: 821px)');
 		const syncViewport = (matches: boolean) => {
 			isDesktopViewport = matches;
-			sidebarOpen = matches;
+			sidebarOpen = matches ? (desktopSidebarPreference ?? true) : false;
 		};
 
 		syncViewport(mediaQuery.matches);
@@ -1361,6 +1364,31 @@
 		);
 	}
 
+	function restoreDesktopSidebarPreference(): void {
+		try {
+			const raw = window.localStorage.getItem(DESKTOP_SIDEBAR_OPEN_KEY);
+			if (raw === 'true') {
+				desktopSidebarPreference = true;
+				return;
+			}
+
+			if (raw === 'false') {
+				desktopSidebarPreference = false;
+			}
+		} catch {
+			// ignore malformed saved sidebar state
+		}
+	}
+
+	function persistDesktopSidebarPreference(value: boolean): void {
+		if (!hasMounted || !isDesktopViewport) {
+			return;
+		}
+
+		desktopSidebarPreference = value;
+		window.localStorage.setItem(DESKTOP_SIDEBAR_OPEN_KEY, value ? 'true' : 'false');
+	}
+
 	function restoreThreadPermissionPresets(): void {
 		try {
 			const raw = window.localStorage.getItem(THREAD_PERMISSION_PRESETS_KEY);
@@ -1843,11 +1871,14 @@
 	}
 
 	function toggleSidebar(): void {
-		sidebarOpen = !sidebarOpen;
+		const next = !sidebarOpen;
+		sidebarOpen = next;
+		persistDesktopSidebarPreference(next);
 	}
 
 	function closeSidebar(): void {
 		sidebarOpen = false;
+		persistDesktopSidebarPreference(false);
 	}
 
 	function collapseSidebarOnMobile(): void {
@@ -2063,10 +2094,10 @@
 	<main
 		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
 	>
-		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]">
-			<div class="mx-auto flex w-full max-w-[680px] items-center">
+		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] min-[821px]:right-auto min-[821px]:left-[1.1rem] min-[821px]:px-0">
+			<div class="mx-auto flex w-full max-w-[680px] items-center min-[821px]:mx-0 min-[821px]:w-auto min-[821px]:max-w-none">
 				<button
-					class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm`}
+					class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
 					type="button"
 					onclick={toggleSidebar}
 					aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
