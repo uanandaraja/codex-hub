@@ -79,7 +79,7 @@ bun run start
 
 Default local addresses:
 
-- web: `http://127.0.0.1:3000`
+- web: `http://127.0.0.1:4321`
 - gateway: `http://127.0.0.1:8787`
 
 ## Tailscale
@@ -87,7 +87,7 @@ Default local addresses:
 Expose only the web app:
 
 ```bash
-tailscale serve --bg --set-path / http://127.0.0.1:3000
+tailscale serve --bg --set-path / http://127.0.0.1:4321
 ```
 
 Keep the gateway local. Keep `codex app-server` local.
@@ -114,7 +114,7 @@ Gateway:
 Web:
 
 - `HOST`: default `0.0.0.0`
-- `PORT`: default `3000`
+- `PORT`: default `4321`
 - `GATEWAY_BASE_URL`: default `http://127.0.0.1:8787`
 
 ## Scripts

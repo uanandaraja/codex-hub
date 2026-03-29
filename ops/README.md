@@ -31,7 +31,7 @@ systemctl --user enable --now codex-hub-web.service
 ## 4. Expose only the web app on the tailnet
 
 ```bash
-tailscale serve --bg --set-path / http://127.0.0.1:3000
+tailscale serve --bg --set-path / http://127.0.0.1:4321
 ```
 
 Keep the gateway on localhost. Keep `codex app-server` on localhost.
@@ -42,5 +42,5 @@ Keep the gateway on localhost. Keep `codex app-server` on localhost.
 systemctl --user status codex-hub-gateway.service
 systemctl --user status codex-hub-web.service
 curl http://127.0.0.1:8787/v1/status
-curl -I http://127.0.0.1:3000
+curl -I http://127.0.0.1:4321
 ```
