@@ -83,7 +83,8 @@ export class CodexAppServerBridge {
 			warnings: [...this.warnings],
 			recentStderr: [...this.recentStderr],
 			lastError: this.lastError,
-			startedAt: this.startedAt
+			startedAt: this.startedAt,
+			account: null
 		};
 	}
 

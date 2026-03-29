@@ -10,6 +10,25 @@ export interface GatewayStatus {
 	recentStderr: string[];
 	lastError: string | null;
 	startedAt: string | null;
+	account: GatewayAccountStatus | null;
+}
+
+export interface GatewayAccountRateLimitWindow {
+	usedPercent: number | null;
+	windowMinutes: number | null;
+	resetsAt: string | null;
+}
+
+export interface GatewayAccountStatus {
+	authMode: string | null;
+	providerLabel: string;
+	email: string | null;
+	name: string | null;
+	accountId: string | null;
+	planType: string | null;
+	fiveHourLimit: GatewayAccountRateLimitWindow | null;
+	weeklyLimit: GatewayAccountRateLimitWindow | null;
+	rateLimitsUpdatedAt: string | null;
 }
 
 export interface UserInputText {

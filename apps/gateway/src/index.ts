@@ -1,6 +1,6 @@
 import { Buffer } from 'node:buffer';
 import { createReadStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { readFile, readdir, stat } from 'node:fs/promises';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -15,7 +15,10 @@ import type {
 	DirectoryEntry,
 	DirectoryListingResponse,
 	FileContentsResponse,
+	GatewayAccountRateLimitWindow,
+	GatewayAccountStatus,
 	GatewayConfig,
+	GatewayStatus,
 	ModelListResponse,
 	PendingServerRequest,
 	ProjectSummary,
@@ -30,6 +33,10 @@ const DEFAULT_PORT = 8787;
 const DEFAULT_HOST = '127.0.0.1';
 const THREAD_PAGE_SIZE = 200;
 const EMPTY_THREAD_USAGE: ThreadUsageResponse = { turns: {} };
+const CODEX_HOME = join(homedir(), '.codex');
+const CODEX_AUTH_PATH = join(CODEX_HOME, 'auth.json');
+const CODEX_SESSIONS_ROOT = join(CODEX_HOME, 'sessions');
+const ACCOUNT_STATUS_CACHE_TTL_MS = 15_000;
 
 const config: GatewayConfig = {
 	port: Number.parseInt(process.env.PORT ?? `${DEFAULT_PORT}`, 10),
@@ -44,6 +51,7 @@ const config: GatewayConfig = {
 
 const bridge = new CodexAppServerBridge(config);
 const threadUsageCache = new Map<string, { modifiedAtMs: number; usage: ThreadUsageResponse }>();
+let accountStatusCache: { expiresAt: number; value: GatewayAccountStatus | null } | null = null;
 
 const server = createServer((request, response) => {
 	void handleRequest(request, response);
@@ -73,16 +81,18 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 
 	try {
 		if (method === 'GET' && pathname === '/healthz') {
-			return sendJson(response, 200, { ok: true, status: bridge.getStatus() });
+			const status = await buildGatewayStatus();
+			return sendJson(response, 200, { ok: true, status });
 		}
 
 		if (method === 'GET' && pathname === '/readyz') {
-			const ready = bridge.getStatus().state === 'ready';
-			return sendJson(response, ready ? 200 : 503, { ready, status: bridge.getStatus() });
+			const status = await buildGatewayStatus();
+			const ready = status.state === 'ready';
+			return sendJson(response, ready ? 200 : 503, { ready, status });
 		}
 
 		if (method === 'GET' && pathname === '/v1/status') {
-			return sendJson(response, 200, bridge.getStatus());
+			return sendJson(response, 200, await buildGatewayStatus());
 		}
 
 		if (method === 'GET' && pathname === '/v1/projects') {
@@ -1041,6 +1051,281 @@ async function parseThreadUsage(threadPath: string): Promise<ThreadUsageResponse
 	}
 
 	return { turns };
+}
+
+async function buildGatewayStatus(): Promise<GatewayStatus> {
+	return {
+		...bridge.getStatus(),
+		account: await loadGatewayAccountStatus()
+	};
+}
+
+async function loadGatewayAccountStatus(): Promise<GatewayAccountStatus | null> {
+	const cached = accountStatusCache;
+	if (cached && cached.expiresAt > Date.now()) {
+		return cached.value;
+	}
+
+	let nextValue: GatewayAccountStatus | null = null;
+
+	try {
+		nextValue = await readGatewayAccountStatus();
+	} catch {
+		nextValue = null;
+	}
+
+	accountStatusCache = {
+		expiresAt: Date.now() + ACCOUNT_STATUS_CACHE_TTL_MS,
+		value: nextValue
+	};
+
+	return nextValue;
+}
+
+async function readGatewayAccountStatus(): Promise<GatewayAccountStatus | null> {
+	const [identity, limits] = await Promise.all([
+		readGatewayAccountIdentity(),
+		readLatestGatewayRateLimits()
+	]);
+
+	if (!identity && !limits) {
+		return null;
+	}
+
+	return {
+		authMode: identity?.authMode ?? null,
+		providerLabel: formatGatewayProviderLabel(identity?.authMode),
+		email: identity?.email ?? null,
+		name: identity?.name ?? null,
+		accountId: identity?.accountId ?? null,
+		planType: limits?.planType ?? null,
+		fiveHourLimit: limits?.fiveHourLimit ?? null,
+		weeklyLimit: limits?.weeklyLimit ?? null,
+		rateLimitsUpdatedAt: limits?.updatedAt ?? null
+	};
+}
+
+async function readGatewayAccountIdentity(): Promise<{
+	authMode: string | null;
+	email: string | null;
+	name: string | null;
+	accountId: string | null;
+} | null> {
+	let raw: string;
+
+	try {
+		raw = await readFile(CODEX_AUTH_PATH, 'utf8');
+	} catch {
+		return null;
+	}
+
+	let parsed: unknown;
+
+	try {
+		parsed = JSON.parse(raw);
+	} catch {
+		return null;
+	}
+
+	if (!isRecord(parsed)) {
+		return null;
+	}
+
+	const tokens = isRecord(parsed.tokens) ? parsed.tokens : null;
+	const claims = parseJwtClaims(readOptionalString(tokens?.id_token));
+
+	return {
+		authMode: readOptionalString(parsed.auth_mode),
+		email: readOptionalString(claims?.email),
+		name: readOptionalString(claims?.name),
+		accountId: readOptionalString(tokens?.account_id)
+	};
+}
+
+function parseJwtClaims(token: string | null): Record<string, unknown> | null {
+	if (!token) {
+		return null;
+	}
+
+	const parts = token.split('.');
+	if (parts.length < 2) {
+		return null;
+	}
+
+	try {
+		const decoded = Buffer.from(parts[1], 'base64url').toString('utf8');
+		const payload = JSON.parse(decoded);
+		return isRecord(payload) ? payload : null;
+	} catch {
+		return null;
+	}
+}
+
+function formatGatewayProviderLabel(authMode: string | null | undefined): string {
+	switch (authMode) {
+		case 'chatgpt':
+			return 'ChatGPT';
+		case 'api_key':
+			return 'API key';
+		default:
+			return 'Codex';
+	}
+}
+
+async function readLatestGatewayRateLimits(): Promise<{
+	planType: string | null;
+	fiveHourLimit: GatewayAccountRateLimitWindow | null;
+	weeklyLimit: GatewayAccountRateLimitWindow | null;
+	updatedAt: string | null;
+} | null> {
+	const recentSessionFiles = await listRecentSessionFiles(CODEX_SESSIONS_ROOT, 12);
+	for (const sessionFile of recentSessionFiles) {
+		const snapshot = await parseLatestRateLimitsFromSessionFile(sessionFile.path);
+		if (snapshot) {
+			return snapshot;
+		}
+	}
+
+	return null;
+}
+
+async function listRecentSessionFiles(
+	root: string,
+	limit: number
+): Promise<Array<{ path: string; mtimeMs: number }>> {
+	const files: Array<{ path: string; mtimeMs: number }> = [];
+
+	async function walk(directory: string): Promise<void> {
+		let entries;
+
+		try {
+			entries = await readdir(directory, { withFileTypes: true });
+		} catch {
+			return;
+		}
+
+		for (const entry of entries) {
+			const nextPath = join(directory, entry.name);
+			if (entry.isDirectory()) {
+				await walk(nextPath);
+				continue;
+			}
+
+			if (!entry.isFile() || !entry.name.endsWith('.jsonl')) {
+				continue;
+			}
+
+			try {
+				const metadata = await stat(nextPath);
+				files.push({ path: nextPath, mtimeMs: metadata.mtimeMs });
+			} catch {
+				// ignore stale session files that disappear between readdir and stat
+			}
+		}
+	}
+
+	await walk(root);
+
+	return files.sort((left, right) => right.mtimeMs - left.mtimeMs).slice(0, limit);
+}
+
+async function parseLatestRateLimitsFromSessionFile(sessionPath: string): Promise<{
+	planType: string | null;
+	fiveHourLimit: GatewayAccountRateLimitWindow | null;
+	weeklyLimit: GatewayAccountRateLimitWindow | null;
+	updatedAt: string | null;
+} | null> {
+	const input = createReadStream(sessionPath, { encoding: 'utf8' });
+	const lines = createInterface({
+		input,
+		crlfDelay: Infinity
+	});
+	let latestSnapshot:
+		| {
+				planType: string | null;
+				fiveHourLimit: GatewayAccountRateLimitWindow | null;
+				weeklyLimit: GatewayAccountRateLimitWindow | null;
+				updatedAt: string | null;
+		  }
+		| null = null;
+
+	try {
+		for await (const line of lines) {
+			if (!line) {
+				continue;
+			}
+
+			let parsed: unknown;
+			try {
+				parsed = JSON.parse(line);
+			} catch {
+				continue;
+			}
+
+			if (!isRecord(parsed) || parsed.type !== 'event_msg' || !isRecord(parsed.payload)) {
+				continue;
+			}
+
+			const payload = parsed.payload;
+			if (readOptionalString(payload.type) !== 'token_count') {
+				continue;
+			}
+
+			const rateLimits = isRecord(payload.rate_limits) ? payload.rate_limits : null;
+			if (!rateLimits) {
+				continue;
+			}
+
+			const primaryWindow = parseRateLimitWindow(rateLimits.primary);
+			const secondaryWindow = parseRateLimitWindow(rateLimits.secondary);
+
+			latestSnapshot = {
+				planType: readOptionalString(rateLimits.plan_type),
+				fiveHourLimit: selectRateLimitWindow(primaryWindow, secondaryWindow, 300, 'primary'),
+				weeklyLimit: selectRateLimitWindow(primaryWindow, secondaryWindow, 10_080, 'secondary'),
+				updatedAt: readOptionalString(parsed.timestamp)
+			};
+		}
+	} finally {
+		lines.close();
+		input.destroy();
+	}
+
+	return latestSnapshot;
+}
+
+function parseRateLimitWindow(value: unknown): GatewayAccountRateLimitWindow | null {
+	if (!isRecord(value)) {
+		return null;
+	}
+
+	return {
+		usedPercent: readOptionalFiniteNumber(value.used_percent),
+		windowMinutes: readOptionalFiniteNumber(value.window_minutes),
+		resetsAt: parseResetTimestamp(readOptionalFiniteNumber(value.resets_at))
+	};
+}
+
+function selectRateLimitWindow(
+	primary: GatewayAccountRateLimitWindow | null,
+	secondary: GatewayAccountRateLimitWindow | null,
+	targetWindowMinutes: number,
+	fallbackKey: 'primary' | 'secondary'
+): GatewayAccountRateLimitWindow | null {
+	const match = [primary, secondary].find((window) => window?.windowMinutes === targetWindowMinutes);
+	if (match) {
+		return match;
+	}
+
+	return fallbackKey === 'primary' ? primary : secondary;
+}
+
+function parseResetTimestamp(value: number | null): string | null {
+	if (value === null) {
+		return null;
+	}
+
+	return new Date(value * 1_000).toISOString();
 }
 
 function getOrCreateTurnUsage(

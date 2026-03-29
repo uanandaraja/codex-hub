@@ -1,9 +1,10 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
-	import { ArrowsClockwiseIcon, ListIcon, PlusIcon } from 'phosphor-svelte';
+	import { ListIcon, PlusIcon, XIcon } from 'phosphor-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
+	import SidebarAccountStatus from '$lib/components/SidebarAccountStatus.svelte';
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
 	import type { PageData } from './$types';
 	import type {
@@ -261,6 +262,7 @@
 		restoreThreadPermissionPresets();
 		syncNotificationPermission();
 		void ensureBrowserNotificationPermission();
+		void refreshStatusSnapshot();
 		syncedPermissionThreadId = undefined;
 		selectedPermissionPreset = permissionPresetForThread(selectedThreadId);
 		hasMounted = true;
@@ -276,6 +278,9 @@
 		};
 
 		mediaQuery.addEventListener('change', handleViewportChange);
+		const statusInterval = window.setInterval(() => {
+			void refreshStatusSnapshot();
+		}, 30_000);
 
 		if (selectedThreadId) {
 			void ensureThreadReady(selectedThreadId);
@@ -291,6 +296,7 @@
 
 		return () => {
 			mediaQuery.removeEventListener('change', handleViewportChange);
+			window.clearInterval(statusInterval);
 			closeThreadEvents();
 		};
 	});
@@ -423,6 +429,14 @@
 			banner = error instanceof Error ? error.message : 'Failed to refresh workspace.';
 		} finally {
 			refreshingWorkspace = false;
+		}
+	}
+
+	async function refreshStatusSnapshot(): Promise<void> {
+		try {
+			status = await api<GatewayStatus>('/api/status');
+		} catch {
+			// preserve the last known account snapshot if the gateway briefly blips
 		}
 	}
 
@@ -1959,7 +1973,7 @@
 	<aside
 		class={`fixed inset-y-0 left-0 z-40 flex w-[19rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
 	>
-		<div class="flex h-[4.75rem] min-w-0 items-center justify-between gap-3 border-b border-line px-[1.1rem]">
+		<div class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 border-b border-line px-[1.1rem] py-[1.05rem]">
 			<div class="min-w-0">
 				<p class="mb-[0.35rem] truncate text-[0.72rem] uppercase tracking-[0.12em] text-muted">Codex Hub</p>
 				<h1 class="truncate text-base font-semibold tracking-[-0.02em] text-fg">Projects</h1>
@@ -1978,15 +1992,15 @@
 				<button
 					class={iconButtonClass}
 					type="button"
-					onclick={() => void refreshWorkspace()}
-					aria-label={refreshingWorkspace ? 'Syncing workspace' : 'Sync workspace'}
+					onclick={closeSidebar}
+					aria-label="Hide sidebar"
 				>
-					<ArrowsClockwiseIcon size={18} class={refreshingWorkspace ? 'animate-spin' : undefined} />
+					<XIcon size={18} />
 				</button>
 			</div>
 		</div>
 
-		<div class="min-h-0 overflow-x-hidden overflow-y-auto pb-[1.1rem]">
+		<div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-[1.1rem]">
 			{#if banner}
 				<div class="mx-[1.1rem] mt-4 border border-[rgba(255,124,96,0.24)] bg-[rgba(255,124,96,0.08)] p-[0.85rem] text-[0.82rem] text-notice">
 					{banner}
@@ -2042,12 +2056,14 @@
 				{/each}
 			</div>
 		</div>
+
+		<SidebarAccountStatus {status} />
 	</aside>
 
 	<main
 		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
 	>
-		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] min-[821px]:hidden">
+		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]">
 			<div class="mx-auto flex w-full max-w-[680px] items-center">
 				<button
 					class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm`}
