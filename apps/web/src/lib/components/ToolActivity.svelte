@@ -1,4 +1,5 @@
 <script lang="ts">
+	import TurnStatusNote from '$lib/components/TurnStatusNote.svelte';
 	import type { CodexThreadItem } from '$lib/types';
 
 	type CommandExecutionItem = Extract<CodexThreadItem, { type: 'commandExecution' }>;
@@ -9,10 +10,20 @@
 
 	let {
 		item,
-		projectsRoot = ''
+		projectsRoot = '',
+		streaming = false,
+		interrupted = false,
+		elapsedSeconds = null,
+		showStatusNote = false,
+		contextLeftPercent = null
 	}: {
 		item: ToolItem;
 		projectsRoot?: string;
+		streaming?: boolean;
+		interrupted?: boolean;
+		elapsedSeconds?: number | null;
+		showStatusNote?: boolean;
+		contextLeftPercent?: number | null;
 	} = $props();
 
 	const displayCommand = $derived.by(() =>
@@ -43,7 +54,8 @@
 		item.type === 'fileChange' ? buildFileChangeLines(item, projectsRoot) : []
 	);
 	const toolBlockClass =
-		'mb-3 min-w-0 overflow-x-auto whitespace-pre-wrap break-words border-l border-line pl-3 font-mono text-[12px] leading-[1.55] [overflow-wrap:anywhere]';
+		'min-w-0 overflow-x-auto whitespace-pre-wrap break-words border-l border-line pl-3 font-mono text-[12px] leading-[1.55] [overflow-wrap:anywhere]';
+	const toolWrapperClass = $derived(showStatusNote ? 'mb-4 w-full min-w-0' : 'mb-3 w-full min-w-0');
 
 	function extractShellCommand(command: string): string {
 		const marker = ' -lc ';
@@ -211,26 +223,36 @@
 </script>
 
 {#if item.type === 'commandExecution'}
-	<div class={`${toolBlockClass} ${commandStateClass}`}>
-		<p class="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 text-[12px] leading-[1.55]">
-			<span class="shrink-0 text-muted">{commandLabel}</span>
-			<span class="shrink-0 text-muted">$</span>
-			<span class="min-w-0 break-words [overflow-wrap:anywhere]">
-				{#each shellTokens as token}
-					<span class={shellTokenClass(token.tone)}>{token.value}</span>
-				{/each}
-			</span>
-		</p>
-	</div>
-{:else if fileChangeLines.length > 0}
-	<div class={`${toolBlockClass} grid gap-1`}>
-		{#each fileChangeLines as line}
-			<p class="flex min-w-0 gap-2 text-[12px] leading-[1.55]">
-				<span class="shrink-0 text-muted">{fileChangeLabel(line.tone)}</span>
-				<span class={`min-w-0 break-words [overflow-wrap:anywhere] ${fileChangeLineClass(line.tone)}`}>
-					{line.text}
+	<div class={toolWrapperClass}>
+		<div class={`${toolBlockClass} ${commandStateClass}`}>
+			<p class="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 text-[12px] leading-[1.55]">
+				<span class="shrink-0 text-muted">{commandLabel}</span>
+				<span class="shrink-0 text-muted">$</span>
+				<span class="min-w-0 break-words [overflow-wrap:anywhere]">
+					{#each shellTokens as token}
+						<span class={shellTokenClass(token.tone)}>{token.value}</span>
+					{/each}
 				</span>
 			</p>
-		{/each}
+		</div>
+		{#if showStatusNote}
+			<TurnStatusNote {streaming} {interrupted} {elapsedSeconds} {contextLeftPercent} />
+		{/if}
+	</div>
+{:else if fileChangeLines.length > 0}
+	<div class={toolWrapperClass}>
+		<div class={`${toolBlockClass} grid gap-1`}>
+			{#each fileChangeLines as line}
+				<p class="flex min-w-0 gap-2 text-[12px] leading-[1.55]">
+					<span class="shrink-0 text-muted">{fileChangeLabel(line.tone)}</span>
+					<span class={`min-w-0 break-words [overflow-wrap:anywhere] ${fileChangeLineClass(line.tone)}`}>
+						{line.text}
+					</span>
+				</p>
+			{/each}
+		</div>
+		{#if showStatusNote}
+			<TurnStatusNote {streaming} {interrupted} {elapsedSeconds} {contextLeftPercent} />
+		{/if}
 	</div>
 {/if}

@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { SpinnerGapIcon, StopIcon } from 'phosphor-svelte';
 	import { Streamdown } from 'svelte-streamdown';
 	import Code from 'svelte-streamdown/code';
 	import { shikiLanguages, shikiTheme, shikiThemes, streamdownTheme } from '$lib/streamdown/config';
+	import TurnStatusNote from '$lib/components/TurnStatusNote.svelte';
 
 	let {
 		role,
@@ -25,59 +25,6 @@
 	} = $props();
 
 	const isUser = $derived(role === 'user');
-	const assistantStatusText = $derived.by(() => {
-		if (!showStatusNote || isUser) {
-			return null;
-		}
-
-		if (streaming) {
-			return `Working... (${formatElapsed(elapsedSeconds)})`;
-		}
-
-		if (interrupted) {
-			return elapsedSeconds === null
-				? 'Interrupted'
-				: `Interrupted after ${formatElapsed(elapsedSeconds)}`;
-		}
-
-		return null;
-	});
-	const assistantContextText = $derived.by(() => {
-		if (!showStatusNote || isUser || contextLeftPercent === null) {
-			return null;
-		}
-
-		return `ctx ${contextLeftPercent}% left`;
-	});
-	const assistantMetaText = $derived.by(() => {
-		const parts: string[] = [];
-		if (assistantStatusText) {
-			parts.push(assistantStatusText);
-		}
-		if (assistantContextText) {
-			parts.push(assistantContextText);
-		}
-		return parts.length > 0 ? parts.join(' | ') : null;
-	});
-
-	function formatElapsed(value: number | null): string {
-		const totalSeconds = Math.max(0, value ?? 0);
-		const hours = Math.floor(totalSeconds / 3_600);
-		const minutes = Math.floor((totalSeconds % 3_600) / 60);
-		const seconds = totalSeconds % 60;
-
-		if (hours > 0) {
-			return minutes > 0
-				? `${hours} hr${hours === 1 ? '' : 's'} ${minutes} min`
-				: `${hours} hr${hours === 1 ? '' : 's'}`;
-		}
-
-		if (minutes > 0) {
-			return `${minutes} min ${seconds} sec${seconds === 1 ? '' : 's'}`;
-		}
-
-		return `${seconds} sec${seconds === 1 ? '' : 's'}`;
-	}
 </script>
 
 {#if isUser}
@@ -118,15 +65,8 @@
 			</div>
 		{/if}
 
-		{#if assistantMetaText}
-			<div class="mt-3 flex items-center gap-2 font-mono text-[12px] leading-[1.55] text-muted">
-				{#if streaming}
-					<SpinnerGapIcon size={14} class="animate-spin text-accent" />
-				{:else if interrupted}
-					<StopIcon size={14} class="text-notice" />
-				{/if}
-				<span>{assistantMetaText}</span>
-			</div>
+		{#if showStatusNote}
+			<TurnStatusNote {streaming} {interrupted} {elapsedSeconds} {contextLeftPercent} />
 		{/if}
 	</article>
 {/if}

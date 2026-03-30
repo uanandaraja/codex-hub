@@ -1,6 +1,13 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
-	import { ListIcon, PlusIcon, SpinnerGapIcon, XIcon } from 'phosphor-svelte';
+	import {
+		CaretDownIcon,
+		CaretRightIcon,
+		ListIcon,
+		PlusIcon,
+		SpinnerGapIcon,
+		XIcon
+	} from 'phosphor-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
@@ -76,6 +83,9 @@
 	let models = $state<ModelSummary[]>(initialModels);
 	let projects = $state<ProjectSummary[]>(initialProjects);
 	let threads = $state<CodexThread[]>(initialThreads);
+	let projectThreadsByPath = $state<Record<string, CodexThread[]>>(
+		initialProjectPath ? { [initialProjectPath]: initialThreads } : {}
+	);
 	let threadDetails = $state<Record<string, CodexThread>>(
 		initialDetailedThread ? { [initialDetailedThread.id]: initialDetailedThread } : {}
 	);
@@ -105,6 +115,10 @@
 	let activeTurnIdsByThread = $state<Record<string, string>>({});
 	let activeTurnStartedAtByThread = $state<Record<string, number>>({});
 	let interruptingTurnsByThread = $state<Record<string, true>>({});
+	let expandedProjectPaths = $state<Record<string, true>>(
+		initialProjectPath ? { [initialProjectPath]: true } : {}
+	);
+	let loadingProjectThreadsByPath = $state<Record<string, true>>({});
 	let streamTickMs = $state(Date.now());
 	let turnElapsedSeconds = $state<Record<string, number>>({});
 	let conversationBody = $state<HTMLElement | null>(null);
@@ -122,9 +136,13 @@
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
 	const projectRowClass =
-		'flex w-full min-w-0 items-center justify-between gap-3 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-[0.95rem] text-left text-fg';
+		'flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg';
+	const projectExpandButtonClass =
+		'inline-flex h-9 w-9 shrink-0 items-center justify-center border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg';
+	const projectSelectButtonClass =
+		'flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent py-[0.95rem] pr-[1.1rem] text-left text-fg';
 	const chatRowClass =
-		'grid w-full min-w-0 grid-cols-1 border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-3 pl-[1.85rem] text-left text-fg';
+		'flex w-full min-w-0 items-center border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-[0.78rem] pl-[1.85rem] text-left text-fg';
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
@@ -181,7 +199,7 @@
 	const renderedConversationEntries = $derived.by<RenderedConversationEntry[]>(() =>
 		currentThread
 			? currentThread.turns.flatMap((turn) => {
-					const lastAgentIndex = findLastAgentMessageIndex(turn.items);
+					const statusNoteIndex = findLastTurnStatusAnchorIndex(turn.items);
 					return turn.items
 						.map((item, index) =>
 							shouldRenderConversationItem(item)
@@ -189,7 +207,7 @@
 										item,
 										turnId: turn.id,
 										turnStatus: turn.status,
-										showStatusNote: index === lastAgentIndex && isAgentMessageRenderItem(item)
+										showStatusNote: index === statusNoteIndex
 									}
 								: null
 						)
@@ -220,7 +238,14 @@
 
 	$effect(() => {
 		if (!selectedProjectPath && projects[0]) {
-			selectedProjectPath = projects[0].path;
+			const projectPath = projects[0].path;
+			selectedProjectPath = projectPath;
+			if (!(projectPath in expandedProjectPaths)) {
+				expandedProjectPaths = {
+					...expandedProjectPaths,
+					[projectPath]: true
+				};
+			}
 		}
 	});
 
@@ -411,6 +436,17 @@
 	});
 
 	$effect(() => {
+		if (!selectedProjectPath || projectThreadsByPath[selectedProjectPath] === threads) {
+			return;
+		}
+
+		projectThreadsByPath = {
+			...projectThreadsByPath,
+			[selectedProjectPath]: threads
+		};
+	});
+
+	$effect(() => {
 		if (!currentThread) {
 			return;
 		}
@@ -456,8 +492,18 @@
 				selectedProjectPath = null;
 				selectedThreadId = null;
 				threads = [];
+				projectThreadsByPath = {};
+				expandedProjectPaths = {};
+				loadingProjectThreadsByPath = {};
 				banner = null;
 				return;
+			}
+
+			if (!(nextProjectPath in expandedProjectPaths)) {
+				expandedProjectPaths = {
+					...expandedProjectPaths,
+					[nextProjectPath]: true
+				};
 			}
 
 			await loadProjectThreads(
@@ -576,6 +622,13 @@
 		};
 	}
 
+	async function fetchProjectThreads(projectPath: string): Promise<CodexThread[]> {
+		const result = await api<{ data: CodexThread[] }>(
+			`/api/threads?projectPath=${encodeURIComponent(projectPath)}`
+		);
+		return sortThreads(result.data);
+	}
+
 	async function refreshThreadUsage(threadId: string): Promise<void> {
 		try {
 			const result = await api<ThreadUsageResponse>(
@@ -594,11 +647,12 @@
 		projectPath: string,
 		preferredThreadId: string | null = null
 	): Promise<CodexThread[]> {
-		const result = await api<{ data: CodexThread[] }>(
-			`/api/threads?projectPath=${encodeURIComponent(projectPath)}`
-		);
-		const nextThreads = sortThreads(result.data);
+		const nextThreads = await fetchProjectThreads(projectPath);
 		threads = nextThreads;
+		projectThreadsByPath = {
+			...projectThreadsByPath,
+			[projectPath]: nextThreads
+		};
 		selectedProjectPath = projectPath;
 		selectedThreadId =
 			preferredThreadId && nextThreads.some((thread) => thread.id === preferredThreadId)
@@ -635,6 +689,13 @@
 			return;
 		}
 
+		if (!(projectPath in expandedProjectPaths)) {
+			expandedProjectPaths = {
+				...expandedProjectPaths,
+				[projectPath]: true
+			};
+		}
+
 		selectedProjectPath = projectPath;
 		selectedThreadId = null;
 		threads = [];
@@ -656,8 +717,59 @@
 		await selectProject(projectPath);
 	}
 
-	async function handleThreadSelect(threadId: string): Promise<void> {
+	async function toggleProjectExpanded(projectPath: string): Promise<void> {
+		if (expandedProjectPaths[projectPath]) {
+			const nextExpandedProjects = { ...expandedProjectPaths };
+			delete nextExpandedProjects[projectPath];
+			expandedProjectPaths = nextExpandedProjects;
+			return;
+		}
+
+		expandedProjectPaths = {
+			...expandedProjectPaths,
+			[projectPath]: true
+		};
+
+		if (projectPath === selectedProjectPath || projectPath in projectThreadsByPath) {
+			return;
+		}
+
+		loadingProjectThreadsByPath = {
+			...loadingProjectThreadsByPath,
+			[projectPath]: true
+		};
+
+		try {
+			projectThreadsByPath = {
+				...projectThreadsByPath,
+				[projectPath]: await fetchProjectThreads(projectPath)
+			};
+			banner = null;
+		} catch (error) {
+			const nextExpandedProjects = { ...expandedProjectPaths };
+			delete nextExpandedProjects[projectPath];
+			expandedProjectPaths = nextExpandedProjects;
+			banner = error instanceof Error ? error.message : 'Failed to expand project.';
+		} finally {
+			if (projectPath in loadingProjectThreadsByPath) {
+				const nextLoadingProjects = { ...loadingProjectThreadsByPath };
+				delete nextLoadingProjects[projectPath];
+				loadingProjectThreadsByPath = nextLoadingProjects;
+			}
+		}
+	}
+
+	async function handleSidebarThreadSelect(projectPath: string, threadId: string): Promise<void> {
 		collapseSidebarOnMobile();
+		if (projectPath !== selectedProjectPath) {
+			if (!(projectPath in expandedProjectPaths)) {
+				expandedProjectPaths = {
+					...expandedProjectPaths,
+					[projectPath]: true
+				};
+			}
+			await loadProjectThreads(projectPath, threadId);
+		}
 		await ensureThreadReady(threadId);
 	}
 
@@ -700,6 +812,12 @@
 			}
 			selectedProjectPath = projectPath;
 			selectedThreadId = result.thread.id;
+			if (!(projectPath in expandedProjectPaths)) {
+				expandedProjectPaths = {
+					...expandedProjectPaths,
+					[projectPath]: true
+				};
+			}
 			projects = insertProjectSummary(projects, projectPath, result.thread);
 			pendingRequestsByThread = {
 				...pendingRequestsByThread,
@@ -1003,10 +1121,6 @@
 		return thread.name || trimLine(thread.preview) || threadFallbackPreview(thread) || 'new chat';
 	}
 
-	function chatPreview(thread: CodexThread): string {
-		return trimLine(thread.preview) || threadFallbackPreview(thread) || shortPath(thread.cwd);
-	}
-
 	function threadIsRunning(thread: CodexThread): boolean {
 		if (threadHasActiveTurn(thread.id)) {
 			return true;
@@ -1024,6 +1138,22 @@
 
 	function projectChatCount(projectPath: string): number {
 		return projects.find((project) => project.path === projectPath)?.threadCount ?? 0;
+	}
+
+	function projectIsExpanded(projectPath: string): boolean {
+		return Boolean(expandedProjectPaths[projectPath]);
+	}
+
+	function projectThreadsLoading(projectPath: string): boolean {
+		return Boolean(loadingProjectThreadsByPath[projectPath]);
+	}
+
+	function sidebarThreadsForProject(projectPath: string): CodexThread[] {
+		if (projectPath === selectedProjectPath) {
+			return projectThreads;
+		}
+
+		return projectThreadsByPath[projectPath] ?? [];
 	}
 
 	function projectNameFromPath(path: string): string {
@@ -2088,9 +2218,10 @@
 		updateTurnStatus(threadId, turnId, 'interrupted');
 	}
 
-	function findLastAgentMessageIndex(items: CodexThreadItem[]): number {
+	function findLastTurnStatusAnchorIndex(items: CodexThreadItem[]): number {
 		for (let index = items.length - 1; index >= 0; index -= 1) {
-			if (isAgentMessageRenderItem(items[index]) && shouldRenderConversationItem(items[index])) {
+			const item = items[index];
+			if (item && shouldRenderConversationItem(item) && !isUserMessageItem(item)) {
 				return index;
 			}
 		}
@@ -2401,43 +2532,61 @@
 			<div class="mt-4">
 				{#each projects as project, index (project.path)}
 					<section class:border-t={index > 0} class:border-line={index > 0}>
-						<button
-							type="button"
+						<div
 							class={projectRowClass}
 							class:border-l-accent={project.path === selectedProjectPath}
 							class:bg-surface-2={project.path === selectedProjectPath}
-							onclick={() => void handleProjectSelect(project.path)}
 						>
-							<span class="min-w-0 flex-1 truncate font-sans text-[0.85rem]">{project.name}</span>
-							<span class="font-mono text-[0.78rem] text-muted"
-								>{projectChatCount(project.path)}</span
+							<button
+								type="button"
+								class={projectExpandButtonClass}
+								onclick={() => void toggleProjectExpanded(project.path)}
+								aria-label={projectIsExpanded(project.path) ? 'Collapse project' : 'Expand project'}
+								aria-expanded={projectIsExpanded(project.path)}
 							>
-						</button>
+								{#if projectIsExpanded(project.path)}
+									<CaretDownIcon size={15} />
+								{:else}
+									<CaretRightIcon size={15} />
+								{/if}
+							</button>
+							<button
+								type="button"
+								class={projectSelectButtonClass}
+								onclick={() => void handleProjectSelect(project.path)}
+							>
+								<span class="min-w-0 flex-1 truncate font-sans text-[0.85rem]">{project.name}</span>
+								<span class="font-mono text-[0.78rem] text-muted"
+									>{projectChatCount(project.path)}</span
+								>
+							</button>
+						</div>
 
-						{#if project.path === selectedProjectPath}
+						{#if projectIsExpanded(project.path)}
 							<div class="pb-2">
-								{#if projectThreads.length === 0}
+								{#if projectThreadsLoading(project.path)}
+									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
+										loading chats...
+									</div>
+								{:else if sidebarThreadsForProject(project.path).length === 0}
 									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
 										no chats yet
 									</div>
 								{:else}
-									{#each projectThreads as thread (thread.id)}
+									{#each sidebarThreadsForProject(project.path) as thread (thread.id)}
 										<button
 											type="button"
 											class={chatRowClass}
 											class:border-l-accent={thread.id === selectedThreadId}
 											class:bg-surface-2={thread.id === selectedThreadId}
-											onclick={() => void handleThreadSelect(thread.id)}
+											onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
 										>
-											<strong class="flex min-w-0 items-center gap-2 text-[0.85rem] font-medium">
+											<strong class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem] font-medium">
 												<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
 												{#if threadIsRunning(thread)}
 													<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
 												{/if}
 											</strong>
-											<span class="block min-w-0 truncate font-mono text-[0.78rem] text-muted">
-												{chatPreview(thread)}
-											</span>
 										</button>
 									{/each}
 								{/if}
@@ -2520,7 +2669,15 @@
 								contextLeftPercent={entryContextLeftPercent(entry)}
 							/>
 						{:else if isCommandExecutionItem(entry.item) || isFileChangeItem(entry.item)}
-							<ToolActivity item={entry.item} projectsRoot={status?.projectsRoot ?? ''} />
+							<ToolActivity
+								item={entry.item}
+								projectsRoot={status?.projectsRoot ?? ''}
+								streaming={entryIsStreaming(entry)}
+								interrupted={entryIsInterrupted(entry)}
+								elapsedSeconds={entryElapsedSeconds(entry)}
+								showStatusNote={entry.showStatusNote}
+								contextLeftPercent={entryContextLeftPercent(entry)}
+							/>
 						{/if}
 					{/each}
 
