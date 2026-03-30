@@ -6,6 +6,10 @@
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
 	import SidebarAccountStatus from '$lib/components/SidebarAccountStatus.svelte';
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
+	import type {
+		PromptAttachmentDraft,
+		PromptSubmitPayload
+	} from '$lib/components/prompt-input.types';
 	import type { PageData } from './$types';
 	import type {
 		CodexThread,
@@ -34,6 +38,10 @@
 		turnStatus: string;
 		showStatusNote: boolean;
 	};
+	type UserImageAttachment = {
+		src: string;
+		alt: string;
+	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
 	const DESKTOP_SIDEBAR_OPEN_KEY = 'codex-hub.desktop-sidebar-open';
@@ -47,10 +55,19 @@
 	const initialProjects = untrack(() => sortProjects(data.projects));
 	const initialThreads = untrack(() => sortThreads(data.threads));
 	const initialBanner = untrack(
-		() => data.errors.status ?? data.errors.projects ?? data.errors.models ?? data.errors.threads ?? null
+		() =>
+			data.errors.status ??
+			data.errors.projects ??
+			data.errors.models ??
+			data.errors.threads ??
+			null
 	);
-	const initialProjectPath = untrack(() => data.initialProjectPath ?? initialProjects[0]?.path ?? null);
-	const initialThreadId = untrack(() => data.initialThreadId ?? resolveInitialThreadId(initialThreads));
+	const initialProjectPath = untrack(
+		() => data.initialProjectPath ?? initialProjects[0]?.path ?? null
+	);
+	const initialThreadId = untrack(
+		() => data.initialThreadId ?? resolveInitialThreadId(initialThreads)
+	);
 	const initialDetailedThread = untrack(() => data.initialThread ?? null);
 	const initialThreadUsage = untrack(() => data.initialThreadUsage ?? {});
 	const initialPendingRequests = untrack(() => data.initialPendingRequests ?? []);
@@ -77,11 +94,13 @@
 	let draftPermissionPreset = $state<PermissionPreset>('full');
 	let threadPermissionPresets = $state<Record<string, PermissionPreset>>({});
 	let selectedPermissionPreset = $state<PermissionPreset>('full');
+	let pendingAttachmentReleases = $state<Record<string, PromptAttachmentDraft[]>>({});
 	let creatingThread = $state(false);
 	let refreshingWorkspace = $state(false);
 	let resolvingRequestId = $state<number | null>(null);
 	let banner = $state<string | null>(initialBanner);
 	let composer = $state('');
+	let composerAttachments = $state<PromptAttachmentDraft[]>([]);
 	let notificationPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
 	let activeTurnId = $state<string | null>(null);
 	let activeTurnStartedAt = $state<number | null>(null);
@@ -121,7 +140,9 @@
 
 		return model.supportedReasoningEfforts.map((option) => option.reasoningEffort);
 	});
-	const permissionPresetConfig = $derived.by(() => resolvePermissionPreset(selectedPermissionPreset));
+	const permissionPresetConfig = $derived.by(() =>
+		resolvePermissionPreset(selectedPermissionPreset)
+	);
 
 	const projectThreads = $derived.by<CodexThread[]>(() => sortThreads(threads));
 
@@ -169,8 +190,7 @@
 										item,
 										turnId: turn.id,
 										turnStatus: turn.status,
-										showStatusNote:
-											index === lastAgentIndex && isAgentMessageRenderItem(item)
+										showStatusNote: index === lastAgentIndex && isAgentMessageRenderItem(item)
 									}
 								: null
 						)
@@ -182,7 +202,10 @@
 		activeTurnStartedAt === null ? 0 : elapsedSecondsFrom(activeTurnStartedAt, streamTickMs)
 	);
 	const canInterruptActiveTurn = $derived(
-		selectedThreadId !== null && activeTurnId !== null && activeTurnId !== 'pending' && !interruptingTurn
+		selectedThreadId !== null &&
+			activeTurnId !== null &&
+			activeTurnId !== 'pending' &&
+			!interruptingTurn
 	);
 
 	$effect(() => {
@@ -300,6 +323,10 @@
 		return () => {
 			mediaQuery.removeEventListener('change', handleViewportChange);
 			window.clearInterval(statusInterval);
+			releaseAttachmentPreviews(composerAttachments);
+			for (const attachments of Object.values(pendingAttachmentReleases)) {
+				releaseAttachmentPreviews(attachments);
+			}
 			closeThreadEvents();
 		};
 	});
@@ -413,7 +440,7 @@
 			const nextProjectPath =
 				selectedProjectPath && nextProjects.some((project) => project.path === selectedProjectPath)
 					? selectedProjectPath
-					: nextProjects[0]?.path ?? null;
+					: (nextProjects[0]?.path ?? null);
 
 			if (!nextProjectPath) {
 				selectedProjectPath = null;
@@ -513,7 +540,7 @@
 		selectedThreadId =
 			preferredThreadId && nextThreads.some((thread) => thread.id === preferredThreadId)
 				? preferredThreadId
-				: nextThreads[0]?.id ?? null;
+				: (nextThreads[0]?.id ?? null);
 		projects = syncProjectSummary(projects, projectPath, nextThreads);
 		return nextThreads;
 	}
@@ -571,7 +598,10 @@
 		await ensureThreadReady(threadId);
 	}
 
-	async function createThread(projectPath = selectedProjectPath, firstMessage?: string): Promise<string | null> {
+	async function createThread(
+		projectPath = selectedProjectPath,
+		firstPrompt?: PromptSubmitPayload
+	): Promise<string | null> {
 		if (!projectPath) {
 			return null;
 		}
@@ -591,7 +621,10 @@
 				})
 			});
 
-			threads = sortThreads([result.thread, ...threads.filter((thread) => thread.id !== result.thread.id)]);
+			threads = sortThreads([
+				result.thread,
+				...threads.filter((thread) => thread.id !== result.thread.id)
+			]);
 			threadDetails = {
 				...threadDetails,
 				[result.thread.id]: result.thread
@@ -612,12 +645,16 @@
 			await ensureThreadEvents(result.thread.id);
 			banner = null;
 
-			if (firstMessage) {
-				await sendTurn(result.thread.id, firstMessage);
+			if (firstPrompt && promptHasContent(firstPrompt)) {
+				await sendTurn(result.thread.id, firstPrompt);
 			}
 
 			return result.thread.id;
 		} catch (error) {
+			if (firstPrompt && promptHasContent(firstPrompt)) {
+				composer = firstPrompt.message;
+				composerAttachments = firstPrompt.attachments;
+			}
 			banner = error instanceof Error ? error.message : 'Failed to create chat.';
 			return null;
 		} finally {
@@ -630,48 +667,76 @@
 		await createThread(projectPath);
 	}
 
-	async function sendMessage(messageValue = composer): Promise<void> {
-		const message = messageValue.trim();
-		if (!message || !selectedProjectPath) {
+	async function sendMessage(
+		submitPayload: PromptSubmitPayload = { message: composer, attachments: composerAttachments }
+	): Promise<void> {
+		const prompt = normalizePromptSubmit(submitPayload);
+		if (!promptHasContent(prompt) || !selectedProjectPath) {
 			return;
 		}
 
 		composer = '';
+		composerAttachments = [];
 
 		if (!selectedThreadId) {
-			await createThread(selectedProjectPath, message);
+			await createThread(selectedProjectPath, prompt);
 			return;
 		}
 
-		await sendTurn(selectedThreadId, message);
+		await sendTurn(selectedThreadId, prompt);
 	}
 
-	async function sendTurn(threadId: string, message: string): Promise<void> {
+	async function sendTurn(threadId: string, prompt: PromptSubmitPayload): Promise<void> {
 		activeTurnId = 'pending';
 		activeTurnStartedAt = Date.now();
 		interruptingTurn = false;
-		const optimisticState = applyOptimisticUserTurn(threadId, message);
+		const optimisticState = applyOptimisticUserTurn(threadId, prompt);
+		queuePendingAttachmentPreviews(threadId, prompt.attachments);
 
 		try {
-			await api(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
-				method: 'POST',
-				headers: {
-					'content-type': 'application/json'
-				},
-				body: JSON.stringify({
-					message,
-					model: selectedModelSummary?.model ?? undefined,
-					effort: selectedEffort,
-					mode: selectedMode,
-					approvalPolicy: permissionPresetConfig.approvalPolicy,
-					sandbox: permissionPresetConfig.sandbox
-				})
-			});
+			if (prompt.attachments.length > 0) {
+				const formData = new FormData();
+				formData.set('message', prompt.message);
+				if (selectedModelSummary?.model) {
+					formData.set('model', selectedModelSummary.model);
+				}
+				if (selectedEffort) {
+					formData.set('effort', selectedEffort);
+				}
+				formData.set('mode', selectedMode);
+				formData.set('approvalPolicy', permissionPresetConfig.approvalPolicy);
+				formData.set('sandbox', permissionPresetConfig.sandbox);
+				for (const attachment of prompt.attachments) {
+					formData.append('attachments', attachment.file, attachment.file.name);
+				}
+
+				await api(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
+					method: 'POST',
+					body: formData
+				});
+			} else {
+				await api(`/api/threads/${encodeURIComponent(threadId)}/turns`, {
+					method: 'POST',
+					headers: {
+						'content-type': 'application/json'
+					},
+					body: JSON.stringify({
+						message: prompt.message,
+						model: selectedModelSummary?.model ?? undefined,
+						effort: selectedEffort,
+						mode: selectedMode,
+						approvalPolicy: permissionPresetConfig.approvalPolicy,
+						sandbox: permissionPresetConfig.sandbox
+					})
+				});
+			}
 
 			await refreshThreads();
 		} catch (error) {
+			unqueuePendingAttachmentPreviews(threadId, prompt.attachments);
 			restoreOptimisticUserTurn(threadId, optimisticState);
-			composer = message;
+			composer = prompt.message;
+			composerAttachments = prompt.attachments;
 			activeTurnId = null;
 			activeTurnStartedAt = null;
 			interruptingTurn = false;
@@ -850,16 +915,17 @@
 			activeTurnId = null;
 			activeTurnStartedAt = null;
 			interruptingTurn = false;
+			releasePendingAttachmentPreviews(threadId);
 			void maybeGenerateThreadName(threadId);
 		}
 	}
 
 	function chatLabel(thread: CodexThread): string {
-		return thread.name || trimLine(thread.preview) || 'new chat';
+		return thread.name || trimLine(thread.preview) || threadFallbackPreview(thread) || 'new chat';
 	}
 
 	function chatPreview(thread: CodexThread): string {
-		return trimLine(thread.preview) || shortPath(thread.cwd);
+		return trimLine(thread.preview) || threadFallbackPreview(thread) || shortPath(thread.cwd);
 	}
 
 	function projectChatCount(projectPath: string): number {
@@ -873,6 +939,34 @@
 
 	function trimLine(value: string | null | undefined): string {
 		return value?.replace(/\s+/g, ' ').trim() ?? '';
+	}
+
+	function threadFallbackPreview(thread: CodexThread): string {
+		for (let turnIndex = thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+			const turn = thread.turns[turnIndex];
+			if (!turn) {
+				continue;
+			}
+
+			for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+				const item = turn.items[itemIndex];
+				if (!item || !isUserMessageItem(item)) {
+					continue;
+				}
+
+				const text = trimLine(renderUserText(item));
+				if (text) {
+					return text;
+				}
+
+				const imageCount = renderUserImages(item).length;
+				if (imageCount > 0) {
+					return describeImageAttachments(imageCount);
+				}
+			}
+		}
+
+		return '';
 	}
 
 	function shortPath(value: string): string {
@@ -944,7 +1038,8 @@
 	}
 
 	function threadNotificationLabel(threadId: string): string {
-		const thread = threadDetails[threadId] ?? threads.find((entry) => entry.id === threadId) ?? null;
+		const thread =
+			threadDetails[threadId] ?? threads.find((entry) => entry.id === threadId) ?? null;
 		return thread ? chatLabel(thread) : 'current chat';
 	}
 
@@ -1236,7 +1331,9 @@
 				}
 			};
 
-			await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, () => worker()));
+			await Promise.all(
+				Array.from({ length: Math.min(concurrency, targets.length) }, () => worker())
+			);
 			if (!failed) {
 				window.localStorage.setItem(THREAD_NAME_BACKFILL_KEY, 'done');
 			}
@@ -1278,12 +1375,17 @@
 	}
 
 	function resolveInitialEffort(list: ModelSummary[]): ReasoningEffort | null {
-		return list.find((model) => model.isDefault)?.defaultReasoningEffort ?? list[0]?.defaultReasoningEffort ?? null;
+		return (
+			list.find((model) => model.isDefault)?.defaultReasoningEffort ??
+			list[0]?.defaultReasoningEffort ??
+			null
+		);
 	}
 
-	function resolvePermissionPreset(
-		preset: PermissionPreset
-	): { approvalPolicy: 'on-request' | 'never'; sandbox: 'workspace-write' | 'danger-full-access' } {
+	function resolvePermissionPreset(preset: PermissionPreset): {
+		approvalPolicy: 'on-request' | 'never';
+		sandbox: 'workspace-write' | 'danger-full-access';
+	} {
 		switch (preset) {
 			case 'auto':
 				return { approvalPolicy: 'never', sandbox: 'workspace-write' };
@@ -1474,6 +1576,85 @@
 		);
 	}
 
+	function normalizePromptSubmit(payload: PromptSubmitPayload): PromptSubmitPayload {
+		return {
+			message: payload.message.trim(),
+			attachments: [...payload.attachments]
+		};
+	}
+
+	function promptHasContent(payload: PromptSubmitPayload): boolean {
+		return payload.message.length > 0 || payload.attachments.length > 0;
+	}
+
+	function describeImageAttachments(count: number): string {
+		return count === 1 ? '1 image attached' : `${count} images attached`;
+	}
+
+	function promptPreview(payload: PromptSubmitPayload): string {
+		return (
+			trimLine(payload.message) ||
+			(payload.attachments.length > 0 ? describeImageAttachments(payload.attachments.length) : '')
+		);
+	}
+
+	function releaseAttachmentPreviews(attachments: PromptAttachmentDraft[]): void {
+		for (const attachment of attachments) {
+			URL.revokeObjectURL(attachment.previewUrl);
+		}
+	}
+
+	function queuePendingAttachmentPreviews(
+		threadId: string,
+		attachments: PromptAttachmentDraft[]
+	): void {
+		if (attachments.length === 0) {
+			return;
+		}
+
+		pendingAttachmentReleases = {
+			...pendingAttachmentReleases,
+			[threadId]: [...(pendingAttachmentReleases[threadId] ?? []), ...attachments]
+		};
+	}
+
+	function unqueuePendingAttachmentPreviews(
+		threadId: string,
+		attachments: PromptAttachmentDraft[]
+	): void {
+		if (attachments.length === 0 || !(threadId in pendingAttachmentReleases)) {
+			return;
+		}
+
+		const attachmentIds = new Set(attachments.map((attachment) => attachment.id));
+		const remaining = (pendingAttachmentReleases[threadId] ?? []).filter(
+			(attachment) => !attachmentIds.has(attachment.id)
+		);
+		if (remaining.length > 0) {
+			pendingAttachmentReleases = {
+				...pendingAttachmentReleases,
+				[threadId]: remaining
+			};
+			return;
+		}
+
+		const next = { ...pendingAttachmentReleases };
+		delete next[threadId];
+		pendingAttachmentReleases = next;
+	}
+
+	function releasePendingAttachmentPreviews(threadId: string): void {
+		const attachments = pendingAttachmentReleases[threadId] ?? [];
+		if (attachments.length === 0) {
+			return;
+		}
+
+		releaseAttachmentPreviews(attachments);
+		const next = { ...pendingAttachmentReleases };
+		delete next[threadId];
+		pendingAttachmentReleases = next;
+	}
+
 	function renderUserText(item: CodexThreadItem): string {
 		if (!isUserMessageItem(item)) {
 			return '';
@@ -1485,13 +1666,45 @@
 			.join('\n\n');
 	}
 
+	function renderUserImages(item: CodexThreadItem): UserImageAttachment[] {
+		if (!isUserMessageItem(item)) {
+			return [];
+		}
+
+		return item.content
+			.map((entry, index) => {
+				if (entry.type === 'image' && typeof entry.url === 'string') {
+					return {
+						src: entry.url,
+						alt: `Attached image ${index + 1}`
+					};
+				}
+
+				if (entry.type === 'localImage' && typeof entry.path === 'string') {
+					return {
+						src: `/api/input-images?path=${encodeURIComponent(entry.path)}`,
+						alt: imageAltFromPath(entry.path, index)
+					};
+				}
+
+				return null;
+			})
+			.filter((entry): entry is UserImageAttachment => entry !== null);
+	}
+
+	function imageAltFromPath(path: string, index: number): string {
+		const fileName = path.split('/').filter(Boolean).at(-1);
+		return fileName ? `Attached image ${index + 1}: ${fileName}` : `Attached image ${index + 1}`;
+	}
+
 	function applyOptimisticUserTurn(
 		threadId: string,
-		message: string
+		prompt: PromptSubmitPayload
 	): { previousDetailedThread: CodexThread | null; previousThreads: CodexThread[] } | null {
 		const previousDetailedThread = threadDetails[threadId] ?? null;
 		const previousThreads = threads;
-		const baseThread = previousDetailedThread ?? threads.find((thread) => thread.id === threadId) ?? null;
+		const baseThread =
+			previousDetailedThread ?? threads.find((thread) => thread.id === threadId) ?? null;
 
 		if (!baseThread) {
 			return null;
@@ -1503,11 +1716,11 @@
 			status: 'in_progress',
 			error: null,
 			items: [
-				createOptimisticUserMessage(optimisticTurnId, message),
+				createOptimisticUserMessage(optimisticTurnId, prompt),
 				createStreamingAgentMessage(optimisticTurnId)
 			]
 		};
-		const optimisticPreview = trimLine(message) || baseThread.preview;
+		const optimisticPreview = promptPreview(prompt) || baseThread.preview;
 		const optimisticUpdatedAt = Date.now();
 		const optimisticThread: CodexThread = {
 			...baseThread,
@@ -1560,17 +1773,25 @@
 
 	function createOptimisticUserMessage(
 		turnId: string,
-		message: string
+		prompt: PromptSubmitPayload
 	): Extract<CodexThreadItem, { type: 'userMessage' }> {
 		return {
 			type: 'userMessage',
 			id: `${turnId}:user`,
 			content: [
-				{
-					type: 'text',
-					text: message,
-					text_elements: []
-				}
+				...(prompt.message
+					? [
+							{
+								type: 'text',
+								text: prompt.message,
+								text_elements: []
+							}
+						]
+					: []),
+				...prompt.attachments.map((attachment) => ({
+					type: 'image',
+					url: attachment.previewUrl
+				}))
 			]
 		};
 	}
@@ -1608,14 +1829,13 @@
 
 		const lastTurn = thread.turns[turnIndex];
 		const items = [...lastTurn.items];
-		const itemIndex =
-			(itemId ? items.findIndex((item) => item.id === itemId) : -1) ??
-			-1;
+		const itemIndex = (itemId ? items.findIndex((item) => item.id === itemId) : -1) ?? -1;
 		const fallbackIndex =
 			itemIndex >= 0
 				? itemIndex
 				: items.findIndex(
-						(item) => item.type === 'agentMessage' && (item.phase === 'streaming' || item.text === '')
+						(item) =>
+							item.type === 'agentMessage' && (item.phase === 'streaming' || item.text === '')
 					);
 
 		if (fallbackIndex >= 0 && items[fallbackIndex]?.type === 'agentMessage') {
@@ -1813,14 +2033,18 @@
 		return currentThreadUsage[entry.turnId]?.contextLeftPercent ?? null;
 	}
 
-	function findStreamingItemReplacementIndex(items: CodexThreadItem[], item: CodexThreadItem): number {
+	function findStreamingItemReplacementIndex(
+		items: CodexThreadItem[],
+		item: CodexThreadItem
+	): number {
 		if (item.type === 'userMessage') {
 			return items.findIndex((entry) => entry.type === 'userMessage');
 		}
 
 		if (item.type === 'agentMessage') {
 			return items.findIndex(
-				(entry) => entry.type === 'agentMessage' && (entry.phase === 'streaming' || entry.text === '')
+				(entry) =>
+					entry.type === 'agentMessage' && (entry.phase === 'streaming' || entry.text === '')
 			);
 		}
 
@@ -1845,9 +2069,7 @@
 		return item.type === 'commandExecution';
 	}
 
-	function isPlanItem(
-		item: CodexThreadItem
-	): item is Extract<CodexThreadItem, { type: 'plan' }> {
+	function isPlanItem(item: CodexThreadItem): item is Extract<CodexThreadItem, { type: 'plan' }> {
 		return item.type === 'plan' && typeof item.text === 'string';
 	}
 
@@ -1862,7 +2084,12 @@
 			return false;
 		}
 
-		return isUserMessageItem(item) || isAgentMessageRenderItem(item) || isCommandExecutionItem(item) || isFileChangeItem(item);
+		return (
+			isUserMessageItem(item) ||
+			isAgentMessageRenderItem(item) ||
+			isCommandExecutionItem(item) ||
+			isFileChangeItem(item)
+		);
 	}
 
 	async function scrollConversationToBottom(): Promise<void> {
@@ -2004,9 +2231,13 @@
 	<aside
 		class={`fixed inset-y-0 left-0 z-40 flex w-[19rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
 	>
-		<div class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 border-b border-line px-[1.1rem] py-[1.05rem]">
+		<div
+			class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 border-b border-line px-[1.1rem] py-[1.05rem]"
+		>
 			<div class="min-w-0">
-				<p class="mb-[0.35rem] truncate text-[0.72rem] uppercase tracking-[0.12em] text-muted">Codex Hub</p>
+				<p class="mb-[0.35rem] truncate text-[0.72rem] uppercase tracking-[0.12em] text-muted">
+					Codex Hub
+				</p>
 				<h1 class="truncate text-base font-semibold tracking-[-0.02em] text-fg">Projects</h1>
 			</div>
 
@@ -2033,7 +2264,9 @@
 
 		<div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-[1.1rem]">
 			{#if banner}
-				<div class="mx-[1.1rem] mt-4 border border-[rgba(255,124,96,0.24)] bg-[rgba(255,124,96,0.08)] p-[0.85rem] text-[0.82rem] text-notice">
+				<div
+					class="mx-[1.1rem] mt-4 border border-[rgba(255,124,96,0.24)] bg-[rgba(255,124,96,0.08)] p-[0.85rem] text-[0.82rem] text-notice"
+				>
 					{banner}
 				</div>
 			{/if}
@@ -2049,7 +2282,9 @@
 							onclick={() => void handleProjectSelect(project.path)}
 						>
 							<span class="min-w-0 flex-1 truncate font-sans text-[0.85rem]">{project.name}</span>
-							<span class="font-mono text-[0.78rem] text-muted">{projectChatCount(project.path)}</span>
+							<span class="font-mono text-[0.78rem] text-muted"
+								>{projectChatCount(project.path)}</span
+							>
 						</button>
 
 						{#if project.path === selectedProjectPath}
@@ -2080,7 +2315,9 @@
 						{/if}
 					</section>
 				{:else}
-					<div class="grid gap-[0.35rem] border-t border-line px-[1.1rem] py-4 font-mono text-[0.78rem] text-muted">
+					<div
+						class="grid gap-[0.35rem] border-t border-line px-[1.1rem] py-4 font-mono text-[0.78rem] text-muted"
+					>
 						<strong>no projects yet</strong>
 						<span>projects appear once they have codex chats</span>
 					</div>
@@ -2094,8 +2331,12 @@
 	<main
 		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
 	>
-		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] min-[821px]:right-auto min-[821px]:left-[1.1rem] min-[821px]:px-0">
-			<div class="mx-auto flex w-full max-w-[680px] items-center min-[821px]:mx-0 min-[821px]:w-auto min-[821px]:max-w-none">
+		<div
+			class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] min-[821px]:right-auto min-[821px]:left-[1.1rem] min-[821px]:px-0"
+		>
+			<div
+				class="mx-auto flex w-full max-w-[680px] items-center min-[821px]:mx-0 min-[821px]:w-auto min-[821px]:max-w-none"
+			>
 				<button
 					class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
 					type="button"
@@ -2124,14 +2365,20 @@
 						<span>Start a chat for this repo.</span>
 					</div>
 				{:else if isOpeningThread}
-					<div class="mb-4 grid w-full gap-[0.35rem] border border-line bg-surface-1 p-[1.15rem] text-muted">
+					<div
+						class="mb-4 grid w-full gap-[0.35rem] border border-line bg-surface-1 p-[1.15rem] text-muted"
+					>
 						<strong class="truncate text-fg">{selectedThreadLabel}</strong>
 						<span>loading chat...</span>
 					</div>
 				{:else}
 					{#each renderedConversationEntries as entry (entry.item.id)}
 						{#if entry.item.type === 'userMessage'}
-							<ChatMessage role="user" content={renderUserText(entry.item)} />
+							<ChatMessage
+								role="user"
+								content={renderUserText(entry.item)}
+								imageAttachments={renderUserImages(entry.item)}
+							/>
 						{:else if isAgentMessageRenderItem(entry.item)}
 							<ChatMessage
 								role="assistant"
@@ -2154,7 +2401,8 @@
 									{request}
 									inline
 									resolving={resolvingRequestId === request.requestId}
-									onresolve={(payload) => resolvePendingRequest(request.threadId, request.requestId, payload)}
+									onresolve={(payload) =>
+										resolvePendingRequest(request.threadId, request.requestId, payload)}
 								/>
 							{/each}
 						</div>
@@ -2164,7 +2412,9 @@
 		</section>
 
 		<footer class="relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4">
-			<div class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(9,10,12,0),rgba(9,10,12,0.56)_42%,rgba(9,10,12,0.92)_100%)] backdrop-blur-[10px]"></div>
+			<div
+				class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(9,10,12,0),rgba(9,10,12,0.56)_42%,rgba(9,10,12,0.92)_100%)] backdrop-blur-[10px]"
+			></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
 				{#if activeFooterRequests.length > 0}
 					<div class="mb-3 grid gap-3">
@@ -2172,7 +2422,8 @@
 							<ServerRequestPanel
 								{request}
 								resolving={resolvingRequestId === request.requestId}
-								onresolve={(payload) => resolvePendingRequest(request.threadId, request.requestId, payload)}
+								onresolve={(payload) =>
+									resolvePendingRequest(request.threadId, request.requestId, payload)}
 							/>
 						{/each}
 					</div>
@@ -2180,6 +2431,7 @@
 
 				<PromptInput
 					bind:value={composer}
+					bind:attachments={composerAttachments}
 					bind:selectedModel
 					bind:selectedEffort
 					bind:selectedMode

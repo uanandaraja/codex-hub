@@ -31,13 +31,27 @@ export interface GatewayAccountStatus {
 	rateLimitsUpdatedAt: string | null;
 }
 
-export interface UserInputText {
+export type UserInputText = {
 	type: 'text';
 	text: string;
 	text_elements: Array<{ byteRange: { start: number; end: number }; placeholder: string | null }>;
-}
+};
 
-export type UserInput = UserInputText | { type: string; [key: string]: unknown };
+export type UserInputImage = {
+	type: 'image';
+	url: string;
+};
+
+export type UserInputLocalImage = {
+	type: 'localImage';
+	path: string;
+};
+
+export type UserInput =
+	| UserInputText
+	| UserInputImage
+	| UserInputLocalImage
+	| { type: string; [key: string]: unknown };
 
 export type CodexThreadItem =
 	| { type: 'userMessage'; id: string; content: UserInput[] }
@@ -163,16 +177,14 @@ export interface CommandExecutionRequestApprovalParams {
 	reason?: string | null;
 	command?: string | null;
 	cwd?: string | null;
-	availableDecisions?:
-		| Array<
-				| 'accept'
-				| 'acceptForSession'
-				| 'decline'
-				| 'cancel'
-				| { acceptWithExecpolicyAmendment: { execpolicy_amendment: unknown } }
-				| { applyNetworkPolicyAmendment: { network_policy_amendment: unknown } }
-		  >
-		| null;
+	availableDecisions?: Array<
+		| 'accept'
+		| 'acceptForSession'
+		| 'decline'
+		| 'cancel'
+		| { acceptWithExecpolicyAmendment: { execpolicy_amendment: unknown } }
+		| { applyNetworkPolicyAmendment: { network_policy_amendment: unknown } }
+	> | null;
 }
 
 export interface FileChangeRequestApprovalParams {

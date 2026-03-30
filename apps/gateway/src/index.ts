@@ -1,9 +1,10 @@
 import { Buffer } from 'node:buffer';
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile, readdir, stat } from 'node:fs/promises';
+import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { extname, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { URL } from 'node:url';
 import { CodexAppServerBridge, JsonRpcError } from './codex-app-server';
@@ -26,7 +27,7 @@ import type {
 	ThreadReadResponse,
 	ThreadNameGenerateResponse,
 	ThreadUsageResponse,
-	TurnContextUsage
+	TurnContextUsage,
 } from './types';
 
 const DEFAULT_PORT = 8787;
@@ -36,7 +37,30 @@ const EMPTY_THREAD_USAGE: ThreadUsageResponse = { turns: {} };
 const CODEX_HOME = join(homedir(), '.codex');
 const CODEX_AUTH_PATH = join(CODEX_HOME, 'auth.json');
 const CODEX_SESSIONS_ROOT = join(CODEX_HOME, 'sessions');
+const INPUT_IMAGES_ROOT = join(homedir(), '.codex-hub', 'input-images');
 const ACCOUNT_STATUS_CACHE_TTL_MS = 15_000;
+const IMAGE_MIME_TO_EXTENSION: Record<string, string> = {
+	'image/png': '.png',
+	'image/jpeg': '.jpg',
+	'image/jpg': '.jpg',
+	'image/webp': '.webp',
+	'image/gif': '.gif',
+	'image/bmp': '.bmp',
+};
+const IMAGE_EXTENSION_TO_MIME: Record<string, string> = {
+	'.png': 'image/png',
+	'.jpg': 'image/jpeg',
+	'.jpeg': 'image/jpeg',
+	'.webp': 'image/webp',
+	'.gif': 'image/gif',
+	'.bmp': 'image/bmp',
+};
+
+type TurnImageUpload = {
+	name: string;
+	type: string;
+	dataBase64: string;
+};
 
 const config: GatewayConfig = {
 	port: Number.parseInt(process.env.PORT ?? `${DEFAULT_PORT}`, 10),
@@ -46,12 +70,15 @@ const config: GatewayConfig = {
 	projectsRoot: process.env.PROJECTS_ROOT ?? join(homedir(), 'Dev'),
 	defaultApprovalPolicy: parseApprovalPolicy(process.env.DEFAULT_APPROVAL_POLICY),
 	defaultSandboxMode: parseSandboxMode(process.env.DEFAULT_SANDBOX_MODE),
-	autoApproveServerRequests: parseBoolean(process.env.AUTO_APPROVE_SERVER_REQUESTS)
+	autoApproveServerRequests: parseBoolean(process.env.AUTO_APPROVE_SERVER_REQUESTS),
 };
 
 const bridge = new CodexAppServerBridge(config);
 const threadUsageCache = new Map<string, { modifiedAtMs: number; usage: ThreadUsageResponse }>();
-let accountStatusCache: { expiresAt: number; value: GatewayAccountStatus | null } | null = null;
+let accountStatusCache: {
+	expiresAt: number;
+	value: GatewayAccountStatus | null;
+} | null = null;
 
 const server = createServer((request, response) => {
 	void handleRequest(request, response);
@@ -95,18 +122,29 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			return sendJson(response, 200, await buildGatewayStatus());
 		}
 
+		if (method === 'GET' && pathname === '/v1/input-images') {
+			const path = readOptionalString(url.searchParams.get('path'));
+			if (!path) {
+				return sendJson(response, 400, {
+					error: { message: 'path is required' },
+				});
+			}
+
+			return sendInputImage(response, path);
+		}
+
 		if (method === 'GET' && pathname === '/v1/projects') {
 			await bridge.ensureReady();
 			const result = collectProjects(
 				await listAllThreads({
 					archived: readOptionalBoolean(url.searchParams.get('archived')),
-					searchTerm: url.searchParams.get('searchTerm')
-				})
+					searchTerm: url.searchParams.get('searchTerm'),
+				}),
 			);
 
 			return sendJson(response, 200, {
 				root: config.projectsRoot,
-				data: result
+				data: result,
 			});
 		}
 
@@ -123,9 +161,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 					(
 						await listAllThreads({
 							archived: readOptionalBoolean(url.searchParams.get('archived')),
-							searchTerm: url.searchParams.get('searchTerm')
+							searchTerm: url.searchParams.get('searchTerm'),
 						})
-					).filter((thread) => projectPathForThread(thread) === bridge.resolvePath(projectPath))
+					).filter((thread) => projectPathForThread(thread) === bridge.resolvePath(projectPath)),
 				);
 				const offset = readOptionalNumber(url.searchParams.get('cursor')) ?? 0;
 				const limit = readOptionalNumber(url.searchParams.get('limit')) ?? allThreads.length;
@@ -139,7 +177,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 				cursor: url.searchParams.get('cursor'),
 				archived: readOptionalBoolean(url.searchParams.get('archived')),
 				searchTerm: url.searchParams.get('searchTerm'),
-				cwd: url.searchParams.get('cwd') ? bridge.resolvePath(url.searchParams.get('cwd')) : null
+				cwd: url.searchParams.get('cwd') ? bridge.resolvePath(url.searchParams.get('cwd')) : null,
 			};
 			const data = await bridge.request<CodexThreadListResponse>('thread/list', params);
 			return sendJson(response, 200, data);
@@ -156,12 +194,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 				sandbox: readOptionalString(body.sandbox) ?? config.defaultSandboxMode,
 				developerInstructions: readOptionalString(body.developerInstructions),
 				experimentalRawEvents: false,
-				persistExtendedHistory: true
+				persistExtendedHistory: true,
 			};
 			const result = await bridge.request<Record<string, unknown>>('thread/start', payload);
 			const name = readOptionalString(body.name);
 			if (name && typeof result.thread === 'object' && result.thread && 'id' in result.thread) {
-				await bridge.request('thread/name/set', { threadId: result.thread.id, name });
+				await bridge.request('thread/name/set', {
+					threadId: result.thread.id,
+					name,
+				});
 				(result.thread as Record<string, unknown>).name = name;
 			}
 			return sendJson(response, 201, result);
@@ -178,32 +219,39 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 		if (method === 'POST' && threadTurnsMatch) {
 			await bridge.ensureReady();
 			const body = await readJsonBody(request);
-			const message = readOptionalString(body.message)?.trim();
-			if (!message) {
-				return sendJson(response, 400, { error: { message: 'message is required' } });
+			const message = readOptionalString(body.message)?.trim() ?? null;
+			const attachments = readTurnImageUploads(body.attachments);
+			if (!message && attachments.length === 0) {
+				return sendJson(response, 400, {
+					error: { message: 'message or image attachment is required' },
+				});
 			}
 
 			const threadId = decodeURIComponent(threadTurnsMatch[1]);
 			const model = readOptionalString(body.model);
 			const effort = readOptionalReasoningEffort(body.effort);
 			const collaborationMode = buildCollaborationMode(readOptionalMode(body.mode), model, effort);
+			const input = [
+				...(message
+					? [
+							{
+								type: 'text',
+								text: message,
+								text_elements: [],
+							},
+						]
+					: []),
+				...(await persistTurnImageUploads(threadId, attachments)),
+			];
 			const result = await bridge.request<Record<string, unknown>>('turn/start', {
 				threadId,
-				input: [
-					{
-						type: 'text',
-						text: message,
-						text_elements: []
-					}
-				],
+				input,
 				cwd: readOptionalString(body.cwd) ? bridge.resolvePath(readOptionalString(body.cwd)) : undefined,
 				model: collaborationMode ? undefined : model,
 				effort: collaborationMode ? undefined : effort,
 				approvalPolicy: readOptionalString(body.approvalPolicy) ?? undefined,
-				sandboxPolicy: buildSandboxPolicy(
-					readOptionalString(body.sandbox) ?? config.defaultSandboxMode
-				),
-				collaborationMode
+				sandboxPolicy: buildSandboxPolicy(readOptionalString(body.sandbox) ?? config.defaultSandboxMode),
+				collaborationMode,
 			});
 			return sendJson(response, 202, result);
 		}
@@ -213,19 +261,21 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			await bridge.ensureReady();
 			const threadId = decodeURIComponent(threadServerRequestsMatch[1]);
 			return sendJson(response, 200, {
-				data: bridge.listPendingServerRequests(threadId)
+				data: bridge.listPendingServerRequests(threadId),
 			});
 		}
 
 		const threadServerRequestResolveMatch = pathname.match(
-			/^\/v1\/threads\/([^/]+)\/server-requests\/([^/]+)\/resolve$/
+			/^\/v1\/threads\/([^/]+)\/server-requests\/([^/]+)\/resolve$/,
 		);
 		if (method === 'POST' && threadServerRequestResolveMatch) {
 			await bridge.ensureReady();
 			const threadId = decodeURIComponent(threadServerRequestResolveMatch[1]);
 			const requestId = readRequestId(threadServerRequestResolveMatch[2]);
 			if (requestId === null) {
-				return sendJson(response, 400, { error: { message: 'requestId must be a number' } });
+				return sendJson(response, 400, {
+					error: { message: 'requestId must be a number' },
+				});
 			}
 
 			const body = await readJsonBody(request);
@@ -239,13 +289,15 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const body = await readJsonBody(request);
 			const turnId = readOptionalString(body.turnId);
 			if (!turnId) {
-				return sendJson(response, 400, { error: { message: 'turnId is required' } });
+				return sendJson(response, 400, {
+					error: { message: 'turnId is required' },
+				});
 			}
 
 			const threadId = decodeURIComponent(threadInterruptMatch[1]);
 			const result = await bridge.request<Record<string, unknown>>('turn/interrupt', {
 				threadId,
-				turnId
+				turnId,
 			});
 			return sendJson(response, 200, result);
 		}
@@ -256,7 +308,9 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const body = await readJsonBody(request);
 			const name = readOptionalString(body.name);
 			if (!name) {
-				return sendJson(response, 400, { error: { message: 'name is required' } });
+				return sendJson(response, 400, {
+					error: { message: 'name is required' },
+				});
 			}
 
 			const threadId = decodeURIComponent(threadNameMatch[1]);
@@ -298,7 +352,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 				model: readOptionalString(body.model),
 				approvalPolicy: readOptionalString(body.approvalPolicy) ?? config.defaultApprovalPolicy,
 				sandbox: readOptionalString(body.sandbox) ?? config.defaultSandboxMode,
-				persistExtendedHistory: true
+				persistExtendedHistory: true,
 			});
 			return sendJson(response, 200, result);
 		}
@@ -309,7 +363,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const threadId = decodeURIComponent(threadUsageMatch[1]);
 			const thread = await bridge.request<Record<string, unknown>>('thread/read', {
 				threadId,
-				includeTurns: false
+				includeTurns: false,
 			});
 			return sendJson(response, 200, await readThreadUsageResponse(thread));
 		}
@@ -321,11 +375,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const includeTurns = readOptionalBoolean(url.searchParams.get('includeTurns')) ?? true;
 			const result = await bridge.request<Record<string, unknown> & { thread: CodexThread }>('thread/read', {
 				threadId,
-				includeTurns
+				includeTurns,
 			});
 			return sendJson(response, 200, {
 				...result,
-				usage: await readThreadUsageResponse(result)
+				usage: await readThreadUsageResponse(result),
 			} satisfies ThreadReadResponse);
 		}
 
@@ -351,7 +405,7 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 							}
 
 							return left.fileName.localeCompare(right.fileName);
-						})
+						}),
 				};
 				return sendJson(response, 200, listing);
 			}
@@ -374,12 +428,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 					text,
 					isBinary,
 					byteLength: bytes.byteLength,
-					modifiedAtMs: metadata.modifiedAtMs
+					modifiedAtMs: metadata.modifiedAtMs,
 				};
 				return sendJson(response, 200, file);
 			}
 
-			return sendJson(response, 404, { error: { message: `path not found: ${path}` } });
+			return sendJson(response, 404, {
+				error: { message: `path not found: ${path}` },
+			});
 		}
 
 		if (method === 'PUT' && pathname === '/v1/fs') {
@@ -389,12 +445,14 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const text = readOptionalString(body.text);
 
 			if (!path || text === null) {
-				return sendJson(response, 400, { error: { message: 'path and text are required' } });
+				return sendJson(response, 400, {
+					error: { message: 'path and text are required' },
+				});
 			}
 
 			await bridge.request('fs/writeFile', {
 				path,
-				dataBase64: Buffer.from(text, 'utf8').toString('base64')
+				dataBase64: Buffer.from(text, 'utf8').toString('base64'),
 			});
 
 			return sendJson(response, 200, { ok: true, path });
@@ -411,7 +469,7 @@ function streamThreadEvents(request: IncomingMessage, response: ServerResponse, 
 		'Content-Type': 'text/event-stream',
 		'Cache-Control': 'no-cache, no-transform',
 		Connection: 'keep-alive',
-		'X-Accel-Buffering': 'no'
+		'X-Accel-Buffering': 'no',
 	});
 
 	writeSseEvent(response, 'ready', { threadId });
@@ -448,7 +506,7 @@ async function listAllThreads(options: {
 			cursor,
 			archived: options.archived ?? null,
 			searchTerm: options.searchTerm ?? null,
-			cwd: null
+			cwd: null,
 		});
 		threads.push(...page.data);
 		cursor = page.nextCursor;
@@ -465,7 +523,7 @@ async function listAllModels(): Promise<ModelListResponse> {
 		const page: ModelListResponse = await bridge.request<ModelListResponse>('model/list', {
 			limit: THREAD_PAGE_SIZE,
 			cursor,
-			includeHidden: false
+			includeHidden: false,
 		});
 		models.push(...page.data);
 		cursor = page.nextCursor;
@@ -490,7 +548,7 @@ function collectProjects(threadList: CodexThread[]): ProjectSummary[] {
 			name: projectNameFromPath(path),
 			path,
 			threadCount: 1,
-			updatedAt: thread.updatedAt
+			updatedAt: thread.updatedAt,
 		});
 	}
 
@@ -538,11 +596,15 @@ function handleError(response: ServerResponse, error: unknown): void {
 				: error.code === -32001
 					? 503
 					: 502;
-		sendJson(response, status, { error: { message: error.message, code: error.code, data: error.data } });
+		sendJson(response, status, {
+			error: { message: error.message, code: error.code, data: error.data },
+		});
 		return;
 	}
 
-	sendJson(response, 500, { error: { message: error instanceof Error ? error.message : String(error) } });
+	sendJson(response, 500, {
+		error: { message: error instanceof Error ? error.message : String(error) },
+	});
 }
 
 function readErrorMessage(value: unknown): string {
@@ -563,6 +625,105 @@ function readErrorMessage(value: unknown): string {
 	return 'Unknown error';
 }
 
+async function sendInputImage(response: ServerResponse, inputPath: string): Promise<void> {
+	const resolvedPath = resolve(inputPath);
+	if (!isPathInsideRoot(resolvedPath, INPUT_IMAGES_ROOT)) {
+		return sendJson(response, 403, {
+			error: { message: 'input image path is not accessible' },
+		});
+	}
+
+	let fileMetadata;
+	try {
+		fileMetadata = await stat(resolvedPath);
+	} catch {
+		return sendJson(response, 404, {
+			error: { message: 'input image was not found' },
+		});
+	}
+
+	if (!fileMetadata.isFile()) {
+		return sendJson(response, 404, {
+			error: { message: 'input image was not found' },
+		});
+	}
+
+	const bytes = await readFile(resolvedPath);
+	response.writeHead(200, {
+		'Content-Type': mimeTypeForImagePath(resolvedPath),
+		'Content-Length': `${bytes.byteLength}`,
+		'Cache-Control': 'private, max-age=31536000, immutable',
+	});
+	response.end(bytes);
+}
+
+function readTurnImageUploads(value: unknown): TurnImageUpload[] {
+	if (value === undefined || value === null) {
+		return [];
+	}
+
+	if (!Array.isArray(value)) {
+		throw new Error('attachments must be an array');
+	}
+
+	return value.map((entry, index) => {
+		if (!entry || typeof entry !== 'object') {
+			throw new Error(`attachment ${index + 1} is invalid`);
+		}
+
+		const name = readOptionalString((entry as Record<string, unknown>).name) ?? `image-${index + 1}`;
+		const type = readOptionalString((entry as Record<string, unknown>).type);
+		const dataBase64 = readOptionalString((entry as Record<string, unknown>).dataBase64);
+		if (!type || !type.startsWith('image/')) {
+			throw new Error(`attachment ${index + 1} must be an image`);
+		}
+
+		if (!dataBase64) {
+			throw new Error(`attachment ${index + 1} is missing data`);
+		}
+
+		const extension = extensionForUploadedImage(name, type);
+		if (!extension) {
+			throw new Error(`attachment ${index + 1} uses an unsupported image type`);
+		}
+
+		return {
+			name,
+			type,
+			dataBase64,
+		};
+	});
+}
+
+async function persistTurnImageUploads(
+	threadId: string,
+	uploads: TurnImageUpload[],
+): Promise<Array<{ type: 'localImage'; path: string }>> {
+	if (uploads.length === 0) {
+		return [];
+	}
+
+	const threadDirectory = join(INPUT_IMAGES_ROOT, sanitizePathSegment(threadId));
+	await mkdir(threadDirectory, { recursive: true });
+
+	const results: Array<{ type: 'localImage'; path: string }> = [];
+	for (const upload of uploads) {
+		const extension = extensionForUploadedImage(upload.name, upload.type);
+		if (!extension) {
+			throw new Error(`unsupported image type: ${upload.type}`);
+		}
+
+		const filePath = join(threadDirectory, `${Date.now()}-${randomUUID()}${extension}`);
+		await writeFile(filePath, Buffer.from(upload.dataBase64, 'base64'));
+		results.push({
+			type: 'localImage',
+			path: filePath,
+		});
+	}
+
+	return results;
+}
+
 async function readJsonBody(request: IncomingMessage): Promise<Record<string, unknown>> {
 	const chunks: Buffer[] = [];
 	for await (const chunk of request) {
@@ -578,9 +739,32 @@ async function readJsonBody(request: IncomingMessage): Promise<Record<string, un
 
 function sendJson(response: ServerResponse, statusCode: number, body: unknown): void {
 	response.writeHead(statusCode, {
-		'Content-Type': 'application/json; charset=utf-8'
+		'Content-Type': 'application/json; charset=utf-8',
 	});
 	response.end(JSON.stringify(body));
+}
+
+function isPathInsideRoot(targetPath: string, rootPath: string): boolean {
+	const relativePath = relative(rootPath, targetPath);
+	return relativePath === '' || (!relativePath.startsWith('..') && !relativePath.startsWith('/'));
+}
+
+function sanitizePathSegment(value: string): string {
+	const sanitized = value.replace(/[^a-zA-Z0-9._-]+/g, '_').trim();
+	return sanitized || 'thread';
+}
+
+function extensionForUploadedImage(fileName: string, mimeType: string): string | null {
+	const normalizedExtension = extname(fileName).toLowerCase();
+	if (normalizedExtension && normalizedExtension in IMAGE_EXTENSION_TO_MIME) {
+		return normalizedExtension === '.jpeg' ? '.jpg' : normalizedExtension;
+	}
+
+	return IMAGE_MIME_TO_EXTENSION[mimeType] ?? null;
+}
+
+function mimeTypeForImagePath(path: string): string {
+	return IMAGE_EXTENSION_TO_MIME[extname(path).toLowerCase()] ?? 'application/octet-stream';
 }
 
 function readOptionalString(value: unknown): string | null {
@@ -612,9 +796,7 @@ function readOptionalBoolean(value: unknown): boolean | null {
 	return null;
 }
 
-function readOptionalReasoningEffort(
-	value: unknown
-): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null {
+function readOptionalReasoningEffort(value: unknown): 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null {
 	switch (value) {
 		case 'none':
 		case 'minimal':
@@ -643,7 +825,7 @@ function readOptionalMode(value: unknown): 'plan' | 'default' | null {
 function buildCollaborationMode(
 	mode: 'plan' | 'default' | null,
 	model: string | null,
-	effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null
+	effort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | null,
 ): Record<string, unknown> | undefined {
 	if (!mode || !model) {
 		return undefined;
@@ -653,8 +835,8 @@ function buildCollaborationMode(
 		mode,
 		settings: {
 			model,
-			reasoning_effort: effort
-		}
+			reasoning_effort: effort,
+		},
 	};
 }
 
@@ -689,7 +871,7 @@ async function readThreadUsageResponse(threadReadResult: Record<string, unknown>
 async function generateThreadName(threadId: string): Promise<ThreadNameGenerateResponse> {
 	const result = await bridge.request<Record<string, unknown> & { thread: CodexThread }>('thread/read', {
 		threadId,
-		includeTurns: true
+		includeTurns: true,
 	});
 	const thread = result.thread;
 	if (!thread) {
@@ -701,7 +883,7 @@ async function generateThreadName(threadId: string): Promise<ThreadNameGenerateR
 		return {
 			threadId,
 			name: existingName,
-			generated: false
+			generated: false,
 		};
 	}
 
@@ -716,12 +898,12 @@ async function generateThreadName(threadId: string): Promise<ThreadNameGenerateR
 		return {
 			threadId,
 			name: fallbackName,
-			generated: false
+			generated: false,
 		};
 	}
 
 	const generated = sanitizeGeneratedThreadName(
-		await requestGeneratedThreadName(thread, context.userText, context.assistantText)
+		await requestGeneratedThreadName(thread, context.userText, context.assistantText),
 	);
 	const finalName = generated ?? fallbackName;
 	if (!finalName) {
@@ -732,13 +914,11 @@ async function generateThreadName(threadId: string): Promise<ThreadNameGenerateR
 	return {
 		threadId,
 		name: finalName,
-		generated: generated !== null
+		generated: generated !== null,
 	};
 }
 
-function extractThreadNamingContext(
-	thread: CodexThread
-): { userText: string; assistantText: string } | null {
+function extractThreadNamingContext(thread: CodexThread): { userText: string; assistantText: string } | null {
 	const firstTurn = thread.turns[0];
 	if (!firstTurn) {
 		return null;
@@ -762,7 +942,7 @@ function extractThreadNamingContext(
 
 	return {
 		userText: userText.slice(0, 1_800),
-		assistantText: assistantText.slice(0, 2_400)
+		assistantText: assistantText.slice(0, 2_400),
 	};
 }
 
@@ -773,11 +953,19 @@ function readUserMessageTexts(item: CodexThread['turns'][number]['items'][number
 
 	return item.content
 		.map((entry) => {
-			if (!entry || typeof entry !== 'object' || !('type' in entry) || entry.type !== 'text') {
+			if (!entry || typeof entry !== 'object' || !('type' in entry)) {
 				return null;
 			}
 
-			return readOptionalString(entry.text);
+			if (entry.type === 'text') {
+				return readOptionalString(entry.text);
+			}
+
+			if (entry.type === 'image' || entry.type === 'localImage') {
+				return '[image attached]';
+			}
+
+			return null;
 		})
 		.filter((value): value is string => value !== null);
 }
@@ -829,20 +1017,17 @@ function sanitizeGeneratedThreadName(value: string): string | null {
 async function requestGeneratedThreadName(
 	thread: CodexThread,
 	userText: string,
-	assistantText: string
+	assistantText: string,
 ): Promise<string> {
-	const promptThread = await bridge.request<Record<string, unknown> & { thread: { id: string } }>(
-		'thread/start',
-		{
-			cwd: thread.cwd,
-			modelProvider: thread.modelProvider,
-			approvalPolicy: 'never',
-			sandbox: 'read-only',
-			ephemeral: true,
-			experimentalRawEvents: false,
-			persistExtendedHistory: false
-		}
-	);
+	const promptThread = await bridge.request<Record<string, unknown> & { thread: { id: string } }>('thread/start', {
+		cwd: thread.cwd,
+		modelProvider: thread.modelProvider,
+		approvalPolicy: 'never',
+		sandbox: 'read-only',
+		ephemeral: true,
+		experimentalRawEvents: false,
+		persistExtendedHistory: false,
+	});
 	const promptThreadId =
 		typeof promptThread.thread === 'object' && promptThread.thread && 'id' in promptThread.thread
 			? readOptionalString(promptThread.thread.id)
@@ -891,11 +1076,11 @@ async function requestGeneratedThreadName(
 						'- Reflect the main task clearly.\n\n' +
 						`User request:\n${userText}\n\n` +
 						`Assistant reply:\n${assistantText}`,
-					text_elements: []
-				}
+					text_elements: [],
+				},
 			],
 			approvalPolicy: 'never',
-			sandboxPolicy: buildSandboxPolicy('read-only')
+			sandboxPolicy: buildSandboxPolicy('read-only'),
 		});
 
 		await completionPromise;
@@ -955,7 +1140,7 @@ async function readCachedThreadUsage(threadPath: string): Promise<ThreadUsageRes
 		const usage = await parseThreadUsage(threadPath);
 		threadUsageCache.set(threadPath, {
 			modifiedAtMs: metadata.mtimeMs,
-			usage
+			usage,
 		});
 		return usage;
 	} catch {
@@ -969,7 +1154,7 @@ async function parseThreadUsage(threadPath: string): Promise<ThreadUsageResponse
 	const input = createReadStream(threadPath, { encoding: 'utf8' });
 	const lines = createInterface({
 		input,
-		crlfDelay: Infinity
+		crlfDelay: Infinity,
 	});
 	let activeTurnId: string | null = null;
 
@@ -1031,9 +1216,7 @@ async function parseThreadUsage(threadPath: string): Promise<ThreadUsageResponse
 			}
 
 			const lastTokenUsage = isRecord(info.last_token_usage) ? info.last_token_usage : null;
-			const totalTokens = lastTokenUsage
-				? readOptionalFiniteNumber(lastTokenUsage.total_tokens)
-				: null;
+			const totalTokens = lastTokenUsage ? readOptionalFiniteNumber(lastTokenUsage.total_tokens) : null;
 			if (totalTokens !== null) {
 				target.lastTokenUsageTotalTokens = totalTokens;
 			}
@@ -1044,10 +1227,7 @@ async function parseThreadUsage(threadPath: string): Promise<ThreadUsageResponse
 	}
 
 	for (const usage of Object.values(turns)) {
-		usage.contextLeftPercent = computeContextLeftPercent(
-			usage.lastTokenUsageTotalTokens,
-			usage.modelContextWindow
-		);
+		usage.contextLeftPercent = computeContextLeftPercent(usage.lastTokenUsageTotalTokens, usage.modelContextWindow);
 	}
 
 	return { turns };
@@ -1056,7 +1236,7 @@ async function parseThreadUsage(threadPath: string): Promise<ThreadUsageResponse
 async function buildGatewayStatus(): Promise<GatewayStatus> {
 	return {
 		...bridge.getStatus(),
-		account: await loadGatewayAccountStatus()
+		account: await loadGatewayAccountStatus(),
 	};
 }
 
@@ -1076,17 +1256,14 @@ async function loadGatewayAccountStatus(): Promise<GatewayAccountStatus | null> 
 
 	accountStatusCache = {
 		expiresAt: Date.now() + ACCOUNT_STATUS_CACHE_TTL_MS,
-		value: nextValue
+		value: nextValue,
 	};
 
 	return nextValue;
 }
 
 async function readGatewayAccountStatus(): Promise<GatewayAccountStatus | null> {
-	const [identity, limits] = await Promise.all([
-		readGatewayAccountIdentity(),
-		readLatestGatewayRateLimits()
-	]);
+	const [identity, limits] = await Promise.all([readGatewayAccountIdentity(), readLatestGatewayRateLimits()]);
 
 	if (!identity && !limits) {
 		return null;
@@ -1101,7 +1278,7 @@ async function readGatewayAccountStatus(): Promise<GatewayAccountStatus | null> 
 		planType: limits?.planType ?? null,
 		fiveHourLimit: limits?.fiveHourLimit ?? null,
 		weeklyLimit: limits?.weeklyLimit ?? null,
-		rateLimitsUpdatedAt: limits?.updatedAt ?? null
+		rateLimitsUpdatedAt: limits?.updatedAt ?? null,
 	};
 }
 
@@ -1138,7 +1315,7 @@ async function readGatewayAccountIdentity(): Promise<{
 		authMode: readOptionalString(parsed.auth_mode),
 		email: readOptionalString(claims?.email),
 		name: readOptionalString(claims?.name),
-		accountId: readOptionalString(tokens?.account_id)
+		accountId: readOptionalString(tokens?.account_id),
 	};
 }
 
@@ -1189,10 +1366,7 @@ async function readLatestGatewayRateLimits(): Promise<{
 	return null;
 }
 
-async function listRecentSessionFiles(
-	root: string,
-	limit: number
-): Promise<Array<{ path: string; mtimeMs: number }>> {
+async function listRecentSessionFiles(root: string, limit: number): Promise<Array<{ path: string; mtimeMs: number }>> {
 	const files: Array<{ path: string; mtimeMs: number }> = [];
 
 	async function walk(directory: string): Promise<void> {
@@ -1238,16 +1412,14 @@ async function parseLatestRateLimitsFromSessionFile(sessionPath: string): Promis
 	const input = createReadStream(sessionPath, { encoding: 'utf8' });
 	const lines = createInterface({
 		input,
-		crlfDelay: Infinity
+		crlfDelay: Infinity,
 	});
-	let latestSnapshot:
-		| {
-				planType: string | null;
-				fiveHourLimit: GatewayAccountRateLimitWindow | null;
-				weeklyLimit: GatewayAccountRateLimitWindow | null;
-				updatedAt: string | null;
-		  }
-		| null = null;
+	let latestSnapshot: {
+		planType: string | null;
+		fiveHourLimit: GatewayAccountRateLimitWindow | null;
+		weeklyLimit: GatewayAccountRateLimitWindow | null;
+		updatedAt: string | null;
+	} | null = null;
 
 	try {
 		for await (const line of lines) {
@@ -1283,7 +1455,7 @@ async function parseLatestRateLimitsFromSessionFile(sessionPath: string): Promis
 				planType: readOptionalString(rateLimits.plan_type),
 				fiveHourLimit: selectRateLimitWindow(primaryWindow, secondaryWindow, 300, 'primary'),
 				weeklyLimit: selectRateLimitWindow(primaryWindow, secondaryWindow, 10_080, 'secondary'),
-				updatedAt: readOptionalString(parsed.timestamp)
+				updatedAt: readOptionalString(parsed.timestamp),
 			};
 		}
 	} finally {
@@ -1302,7 +1474,7 @@ function parseRateLimitWindow(value: unknown): GatewayAccountRateLimitWindow | n
 	return {
 		usedPercent: readOptionalFiniteNumber(value.used_percent),
 		windowMinutes: readOptionalFiniteNumber(value.window_minutes),
-		resetsAt: parseResetTimestamp(readOptionalFiniteNumber(value.resets_at))
+		resetsAt: parseResetTimestamp(readOptionalFiniteNumber(value.resets_at)),
 	};
 }
 
@@ -1310,7 +1482,7 @@ function selectRateLimitWindow(
 	primary: GatewayAccountRateLimitWindow | null,
 	secondary: GatewayAccountRateLimitWindow | null,
 	targetWindowMinutes: number,
-	fallbackKey: 'primary' | 'secondary'
+	fallbackKey: 'primary' | 'secondary',
 ): GatewayAccountRateLimitWindow | null {
 	const match = [primary, secondary].find((window) => window?.windowMinutes === targetWindowMinutes);
 	if (match) {
@@ -1328,14 +1500,11 @@ function parseResetTimestamp(value: number | null): string | null {
 	return new Date(value * 1_000).toISOString();
 }
 
-function getOrCreateTurnUsage(
-	turns: Record<string, TurnContextUsage>,
-	turnId: string
-): TurnContextUsage {
+function getOrCreateTurnUsage(turns: Record<string, TurnContextUsage>, turnId: string): TurnContextUsage {
 	turns[turnId] ??= {
 		lastTokenUsageTotalTokens: null,
 		modelContextWindow: null,
-		contextLeftPercent: null
+		contextLeftPercent: null,
 	};
 	return turns[turnId];
 }
