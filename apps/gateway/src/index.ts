@@ -576,11 +576,16 @@ function projectNameFromPath(path: string): string {
 
 function sortProjects(list: ProjectSummary[]): ProjectSummary[] {
 	return [...list].sort((left, right) => {
-		if (left.updatedAt !== right.updatedAt) {
-			return right.updatedAt - left.updatedAt;
+		const byName = left.name.localeCompare(right.name, undefined, {
+			sensitivity: 'base',
+		});
+		if (byName !== 0) {
+			return byName;
 		}
 
-		return left.name.localeCompare(right.name);
+		return left.path.localeCompare(right.path, undefined, {
+			sensitivity: 'base',
+		});
 	});
 }
 
