@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
-	import { ListIcon, PlusIcon, XIcon } from 'phosphor-svelte';
+	import { ListIcon, PlusIcon, SpinnerGapIcon, XIcon } from 'phosphor-svelte';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
@@ -102,9 +102,9 @@
 	let composer = $state('');
 	let composerAttachments = $state<PromptAttachmentDraft[]>([]);
 	let notificationPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
-	let activeTurnId = $state<string | null>(null);
-	let activeTurnStartedAt = $state<number | null>(null);
-	let interruptingTurn = $state(false);
+	let activeTurnIdsByThread = $state<Record<string, string>>({});
+	let activeTurnStartedAtByThread = $state<Record<string, number>>({});
+	let interruptingTurnsByThread = $state<Record<string, true>>({});
 	let streamTickMs = $state(Date.now());
 	let turnElapsedSeconds = $state<Record<string, number>>({});
 	let conversationBody = $state<HTMLElement | null>(null);
@@ -114,11 +114,10 @@
 	let hasMounted = false;
 	let optimisticTurnCounter = 0;
 	let syncedPermissionThreadId: string | null | undefined = undefined;
-	let eventSource = $state<EventSource | null>(null);
-	let subscribedThreadId = $state<string | null>(null);
-	let threadEventsReady = $state<Promise<void> | null>(null);
 	let notifiedRequestIds = $state<Record<string, true>>({});
 	let notifiedTurnEvents = $state<Record<string, true>>({});
+	const threadEventSources = new Map<string, EventSource>();
+	const threadEventsReadyByThread = new Map<string, Promise<void>>();
 
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
@@ -198,14 +197,25 @@
 				})
 			: []
 	);
+	const selectedActiveTurnId = $derived.by(() =>
+		selectedThreadId ? (activeTurnIdsByThread[selectedThreadId] ?? null) : null
+	);
+	const selectedActiveTurnStartedAt = $derived.by(() =>
+		selectedThreadId ? (activeTurnStartedAtByThread[selectedThreadId] ?? null) : null
+	);
+	const selectedThreadInterrupting = $derived.by(() =>
+		Boolean(selectedThreadId && interruptingTurnsByThread[selectedThreadId])
+	);
 	const activeTurnElapsedSeconds = $derived.by(() =>
-		activeTurnStartedAt === null ? 0 : elapsedSecondsFrom(activeTurnStartedAt, streamTickMs)
+		selectedActiveTurnStartedAt === null
+			? 0
+			: elapsedSecondsFrom(selectedActiveTurnStartedAt, streamTickMs)
 	);
 	const canInterruptActiveTurn = $derived(
 		selectedThreadId !== null &&
-			activeTurnId !== null &&
-			activeTurnId !== 'pending' &&
-			!interruptingTurn
+			selectedActiveTurnId !== null &&
+			selectedActiveTurnId !== 'pending' &&
+			!selectedThreadInterrupting
 	);
 
 	$effect(() => {
@@ -338,7 +348,7 @@
 	});
 
 	$effect(() => {
-		if (!activeTurnId || activeTurnStartedAt === null) {
+		if (!selectedActiveTurnId || selectedActiveTurnStartedAt === null) {
 			return;
 		}
 
@@ -353,7 +363,7 @@
 	});
 
 	$effect(() => {
-		if (!selectedThreadId || !activeTurnId || activeTurnStartedAt === null) {
+		if (!selectedThreadId || !selectedActiveTurnId || selectedActiveTurnStartedAt === null) {
 			return;
 		}
 
@@ -393,7 +403,7 @@
 	});
 
 	$effect(() => {
-		if (selectedThreadId || !hasMounted) {
+		if (selectedThreadId || !hasMounted || Object.keys(activeTurnIdsByThread).length > 0) {
 			return;
 		}
 
@@ -470,14 +480,67 @@
 		}
 	}
 
-	async function ensureThreadReady(threadId: string): Promise<void> {
-		if (threadId !== selectedThreadId) {
-			activeTurnId = null;
-			activeTurnStartedAt = null;
-			interruptingTurn = false;
+	function markThreadActiveTurn(threadId: string, turnId: string, startedAt = Date.now()): void {
+		activeTurnIdsByThread = {
+			...activeTurnIdsByThread,
+			[threadId]: turnId
+		};
+		if (!(threadId in activeTurnStartedAtByThread)) {
+			activeTurnStartedAtByThread = {
+				...activeTurnStartedAtByThread,
+				[threadId]: startedAt
+			};
+		}
+	}
+
+	function clearThreadActiveTurn(threadId: string): void {
+		if (threadId in activeTurnIdsByThread) {
+			const next = { ...activeTurnIdsByThread };
+			delete next[threadId];
+			activeTurnIdsByThread = next;
 		}
 
+		if (threadId in activeTurnStartedAtByThread) {
+			const next = { ...activeTurnStartedAtByThread };
+			delete next[threadId];
+			activeTurnStartedAtByThread = next;
+		}
+
+		clearThreadInterrupting(threadId);
+	}
+
+	function setThreadInterrupting(threadId: string): void {
+		interruptingTurnsByThread = {
+			...interruptingTurnsByThread,
+			[threadId]: true
+		};
+	}
+
+	function clearThreadInterrupting(threadId: string): void {
+		if (!(threadId in interruptingTurnsByThread)) {
+			return;
+		}
+
+		const next = { ...interruptingTurnsByThread };
+		delete next[threadId];
+		interruptingTurnsByThread = next;
+	}
+
+	function threadHasActiveTurn(threadId: string): boolean {
+		return threadId in activeTurnIdsByThread;
+	}
+
+	function pruneInactiveThreadEventSubscriptions(): void {
+		for (const threadId of threadEventSources.keys()) {
+			if (threadId !== selectedThreadId && !threadHasActiveTurn(threadId)) {
+				closeThreadEvents(threadId);
+			}
+		}
+	}
+
+	async function ensureThreadReady(threadId: string): Promise<void> {
 		selectedThreadId = threadId;
+		pruneInactiveThreadEventSubscriptions();
 		try {
 			await ensureThreadEvents(threadId);
 			await api(`/api/threads/${encodeURIComponent(threadId)}/resume`, {
@@ -687,13 +750,13 @@
 	}
 
 	async function sendTurn(threadId: string, prompt: PromptSubmitPayload): Promise<void> {
-		activeTurnId = 'pending';
-		activeTurnStartedAt = Date.now();
-		interruptingTurn = false;
+		markThreadActiveTurn(threadId, 'pending');
+		clearThreadInterrupting(threadId);
 		const optimisticState = applyOptimisticUserTurn(threadId, prompt);
 		queuePendingAttachmentPreviews(threadId, prompt.attachments);
 
 		try {
+			await ensureThreadEvents(threadId);
 			if (prompt.attachments.length > 0) {
 				const formData = new FormData();
 				formData.set('message', prompt.message);
@@ -737,21 +800,24 @@
 			restoreOptimisticUserTurn(threadId, optimisticState);
 			composer = prompt.message;
 			composerAttachments = prompt.attachments;
-			activeTurnId = null;
-			activeTurnStartedAt = null;
-			interruptingTurn = false;
+			clearThreadActiveTurn(threadId);
 			banner = error instanceof Error ? error.message : 'Failed to send message.';
 		}
 	}
 
 	async function interruptActiveTurn(): Promise<void> {
-		if (!selectedThreadId || !activeTurnId || activeTurnId === 'pending' || interruptingTurn) {
+		if (
+			!selectedThreadId ||
+			!selectedActiveTurnId ||
+			selectedActiveTurnId === 'pending' ||
+			selectedThreadInterrupting
+		) {
 			return;
 		}
 
-		interruptingTurn = true;
-		const turnId = activeTurnId;
-		const elapsedSeconds = activeTurnStartedAt === null ? null : activeTurnElapsedSeconds;
+		setThreadInterrupting(selectedThreadId);
+		const turnId = selectedActiveTurnId;
+		const elapsedSeconds = selectedActiveTurnStartedAt === null ? null : activeTurnElapsedSeconds;
 
 		try {
 			await api(`/api/threads/${encodeURIComponent(selectedThreadId)}/interrupt`, {
@@ -772,7 +838,7 @@
 			markTurnInterrupted(selectedThreadId, turnId);
 			banner = null;
 		} catch (error) {
-			interruptingTurn = false;
+			clearThreadInterrupting(selectedThreadId);
 			banner = error instanceof Error ? error.message : 'Failed to interrupt turn.';
 		}
 	}
@@ -821,9 +887,11 @@
 
 	function handleNotification(notification: RpcNotification): void {
 		const threadId = readThreadId(notification);
-		if (!threadId || threadId !== selectedThreadId) {
+		if (!threadId) {
 			return;
 		}
+		const isSelectedThread = threadId === selectedThreadId;
+		const shouldRenderStreamingState = isSelectedThread || threadId in threadDetails;
 
 		if (notification.method === 'serverRequest/pending') {
 			const pendingRequest = readPendingServerRequest(notification.params);
@@ -844,10 +912,7 @@
 
 		if (notification.method === 'turn/started') {
 			const turnId = readTurnId(notification.params) ?? 'pending';
-			activeTurnId = turnId;
-			if (activeTurnStartedAt === null) {
-				activeTurnStartedAt = Date.now();
-			}
+			markThreadActiveTurn(threadId, turnId, activeTurnStartedAtByThread[threadId] ?? Date.now());
 			if (turnId !== 'pending') {
 				updateTurnStatus(threadId, turnId, readTurnStatus(notification.params) ?? 'inProgress');
 			}
@@ -855,6 +920,10 @@
 		}
 
 		if (notification.method === 'item/started' || notification.method === 'item/completed') {
+			if (!shouldRenderStreamingState) {
+				return;
+			}
+
 			const item = readTurnItem(notification.params);
 			if (!item) {
 				return;
@@ -865,6 +934,10 @@
 		}
 
 		if (notification.method === 'item/agentMessage/delta') {
+			if (!shouldRenderStreamingState) {
+				return;
+			}
+
 			appendStreamingAgentDelta(
 				threadId,
 				readTurnId(notification.params),
@@ -879,10 +952,11 @@
 			const turnStatus = readTurnStatus(notification.params);
 			if (turnId && turnStatus) {
 				updateTurnStatus(threadId, turnId, turnStatus);
-				if (turnStatus === 'interrupted' && activeTurnStartedAt !== null) {
+				const startedAt = activeTurnStartedAtByThread[threadId] ?? null;
+				if (turnStatus === 'interrupted' && startedAt !== null) {
 					turnElapsedSeconds = {
 						...turnElapsedSeconds,
-						[turnId]: activeTurnElapsedSeconds
+						[turnId]: elapsedSecondsFrom(startedAt)
 					};
 				}
 				maybeNotifyTurnEvent(threadId, turnId, turnStatus);
@@ -893,13 +967,19 @@
 	}
 
 	async function finalizeTurn(threadId: string): Promise<void> {
-		const finalTurnId = activeTurnId;
-		const finalStartedAt = activeTurnStartedAt;
+		const finalTurnId = activeTurnIdsByThread[threadId] ?? null;
+		const finalStartedAt = activeTurnStartedAtByThread[threadId] ?? null;
 
 		try {
-			await Promise.all([fetchThread(threadId), refreshThreads()]);
+			const tasks: Promise<void>[] = [refreshThreads()];
+			if (threadId === selectedThreadId || threadId in threadDetails) {
+				tasks.push(fetchThread(threadId));
+			}
+			await Promise.all(tasks);
 		} catch (error) {
-			banner = error instanceof Error ? error.message : 'Failed to finalize chat.';
+			if (threadId === selectedThreadId) {
+				banner = error instanceof Error ? error.message : 'Failed to finalize chat.';
+			}
 		} finally {
 			if (
 				finalTurnId &&
@@ -912,10 +992,9 @@
 					[finalTurnId]: elapsedSecondsFrom(finalStartedAt)
 				};
 			}
-			activeTurnId = null;
-			activeTurnStartedAt = null;
-			interruptingTurn = false;
+			clearThreadActiveTurn(threadId);
 			releasePendingAttachmentPreviews(threadId);
+			pruneInactiveThreadEventSubscriptions();
 			void maybeGenerateThreadName(threadId);
 		}
 	}
@@ -926,6 +1005,21 @@
 
 	function chatPreview(thread: CodexThread): string {
 		return trimLine(thread.preview) || threadFallbackPreview(thread) || shortPath(thread.cwd);
+	}
+
+	function threadIsRunning(thread: CodexThread): boolean {
+		if (threadHasActiveTurn(thread.id)) {
+			return true;
+		}
+
+		const detailedThread = threadDetails[thread.id] ?? null;
+		const latestTurn = detailedThread?.turns.at(-1) ?? thread.turns.at(-1) ?? null;
+		if (latestTurn && isInProgressTurnStatus(latestTurn.status)) {
+			return true;
+		}
+
+		const normalizedStatus = normalizeTurnStatus(thread.status);
+		return normalizedStatus === 'inprogress' || normalizedStatus === 'running' || normalizedStatus === 'active';
 	}
 
 	function projectChatCount(projectPath: string): number {
@@ -1150,6 +1244,30 @@
 		}
 
 		return item as CodexThreadItem;
+	}
+
+	function readStatusToken(status: unknown): string | null {
+		if (typeof status === 'string' && status.trim()) {
+			return status;
+		}
+
+		if (!status || typeof status !== 'object') {
+			return null;
+		}
+
+		if ('type' in status && typeof status.type === 'string' && status.type.trim()) {
+			return status.type;
+		}
+
+		if ('status' in status && typeof status.status === 'string' && status.status.trim()) {
+			return status.status;
+		}
+
+		if ('state' in status && typeof status.state === 'string' && status.state.trim()) {
+			return status.state;
+		}
+
+		return null;
 	}
 
 	function readPendingServerRequest(params?: Record<string, unknown>): PendingServerRequest | null {
@@ -1924,7 +2042,7 @@
 		}
 
 		for (let index = thread.turns.length - 1; index >= 0; index -= 1) {
-			if (thread.turns[index]?.status === 'in_progress') {
+			if (isInProgressTurnStatus(thread.turns[index]?.status ?? null)) {
 				return index;
 			}
 		}
@@ -1980,15 +2098,16 @@
 		return -1;
 	}
 
-	function normalizeTurnStatus(status: string): string {
-		return status.toLowerCase().replace(/[_\s-]/g, '');
+	function normalizeTurnStatus(status: unknown): string {
+		const token = readStatusToken(status);
+		return token ? token.toLowerCase().replace(/[_\s-]/g, '') : '';
 	}
 
-	function isInterruptedTurnStatus(status: string): boolean {
+	function isInterruptedTurnStatus(status: unknown): boolean {
 		return normalizeTurnStatus(status) === 'interrupted';
 	}
 
-	function isInProgressTurnStatus(status: string): boolean {
+	function isInProgressTurnStatus(status: unknown): boolean {
 		return normalizeTurnStatus(status) === 'inprogress';
 	}
 
@@ -2002,7 +2121,7 @@
 		}
 
 		if (
-			activeTurnStartedAt !== null &&
+			selectedActiveTurnStartedAt !== null &&
 			entry.showStatusNote &&
 			isInProgressTurnStatus(entry.turnStatus)
 		) {
@@ -2015,7 +2134,7 @@
 	function entryIsStreaming(entry: RenderedConversationEntry): boolean {
 		return (
 			entry.showStatusNote &&
-			activeTurnStartedAt !== null &&
+			selectedActiveTurnStartedAt !== null &&
 			isInProgressTurnStatus(entry.turnStatus) &&
 			isAgentMessageRenderItem(entry.item)
 		);
@@ -2136,23 +2255,38 @@
 		}
 	}
 
-	function closeThreadEvents(): void {
-		eventSource?.close();
-		eventSource = null;
-		subscribedThreadId = null;
-		threadEventsReady = null;
+	function closeThreadEvents(threadId?: string): void {
+		if (threadId) {
+			threadEventSources.get(threadId)?.close();
+			threadEventSources.delete(threadId);
+			threadEventsReadyByThread.delete(threadId);
+			return;
+		}
+
+		for (const source of threadEventSources.values()) {
+			source.close();
+		}
+		threadEventSources.clear();
+		threadEventsReadyByThread.clear();
 	}
 
 	function ensureThreadEvents(threadId: string): Promise<void> {
-		if (subscribedThreadId === threadId && threadEventsReady) {
-			return threadEventsReady;
+		const existing = threadEventsReadyByThread.get(threadId);
+		if (existing) {
+			return existing;
 		}
 
-		closeThreadEvents();
-		subscribedThreadId = threadId;
-		threadEventsReady = new Promise<void>((resolve, reject) => {
+		const readyPromise = new Promise<void>((resolve, reject) => {
 			const source = new EventSource(`/api/threads/${encodeURIComponent(threadId)}/events`);
 			let settled = false;
+			const clearTrackedThread = () => {
+				if (threadEventSources.get(threadId) === source) {
+					threadEventSources.delete(threadId);
+				}
+				if (threadEventsReadyByThread.get(threadId) === readyPromise) {
+					threadEventsReadyByThread.delete(threadId);
+				}
+			};
 			const onReady = () => {
 				if (settled) {
 					return;
@@ -2178,11 +2312,7 @@
 				source.removeEventListener('ready', onReady);
 				source.removeEventListener('error', onInitialError);
 				source.close();
-				if (eventSource === source) {
-					eventSource = null;
-					subscribedThreadId = null;
-					threadEventsReady = null;
-				}
+				clearTrackedThread();
 				reject(new Error('Failed to subscribe to thread events.'));
 			};
 
@@ -2195,21 +2325,18 @@
 				source.removeEventListener('ready', onReady);
 				source.removeEventListener('error', onInitialError);
 				source.close();
-				if (eventSource === source) {
-					eventSource = null;
-					subscribedThreadId = null;
-					threadEventsReady = null;
-				}
+				clearTrackedThread();
 				reject(new Error('Timed out waiting for thread events.'));
 			}, 5_000);
 
 			source.addEventListener('ready', onReady, { once: true });
 			source.addEventListener('rpc', onRpc);
 			source.addEventListener('error', onInitialError);
-			eventSource = source;
+			threadEventSources.set(threadId, source);
 		});
 
-		return threadEventsReady;
+		threadEventsReadyByThread.set(threadId, readyPromise);
+		return readyPromise;
 	}
 </script>
 
@@ -2302,8 +2429,11 @@
 											class:bg-surface-2={thread.id === selectedThreadId}
 											onclick={() => void handleThreadSelect(thread.id)}
 										>
-											<strong class="block min-w-0 truncate text-[0.85rem] font-medium">
-												{chatLabel(thread)}
+											<strong class="flex min-w-0 items-center gap-2 text-[0.85rem] font-medium">
+												<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
+												{#if threadIsRunning(thread)}
+													<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
+												{/if}
 											</strong>
 											<span class="block min-w-0 truncate font-mono text-[0.78rem] text-muted">
 												{chatPreview(thread)}
@@ -2439,9 +2569,9 @@
 					{models}
 					placeholder="enter your message"
 					disabled={!selectedProjectPath}
-					isStreaming={activeTurnId !== null}
+					isStreaming={selectedActiveTurnId !== null}
 					canInterrupt={canInterruptActiveTurn}
-					isInterrupting={interruptingTurn}
+					isInterrupting={selectedThreadInterrupting}
 					onsubmit={sendMessage}
 					oninterrupt={interruptActiveTurn}
 				/>

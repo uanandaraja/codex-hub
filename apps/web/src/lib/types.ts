@@ -87,6 +87,13 @@ export interface CodexTurn {
 	items: CodexThreadItem[];
 }
 
+export type CodexThreadStatus =
+	| string
+	| { type: 'notLoaded' }
+	| { type: 'idle' }
+	| { type: 'systemError' }
+	| { type: 'active'; activeFlags: string[] };
+
 export interface CodexThread {
 	id: string;
 	preview: string;
@@ -94,7 +101,7 @@ export interface CodexThread {
 	modelProvider: string;
 	createdAt: number;
 	updatedAt: number;
-	status: string;
+	status: CodexThreadStatus;
 	path: string | null;
 	cwd: string;
 	cliVersion: string;
