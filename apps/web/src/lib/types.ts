@@ -47,10 +47,17 @@ export type UserInputLocalImage = {
 	path: string;
 };
 
+export type UserInputMention = {
+	type: 'mention';
+	name: string;
+	path: string;
+};
+
 export type UserInput =
 	| UserInputText
 	| UserInputImage
 	| UserInputLocalImage
+	| UserInputMention
 	| { type: string; [key: string]: unknown };
 
 export type CodexThreadItem =
@@ -305,6 +312,21 @@ export interface FileNode {
 }
 
 export type FsNode = DirectoryNode | FileNode;
+
+export type FuzzyFileSearchMatchType = 'file' | 'directory';
+
+export type FuzzyFileSearchResult = {
+	root: string;
+	path: string;
+	match_type: FuzzyFileSearchMatchType;
+	file_name: string;
+	score: number;
+	indices: number[] | null;
+};
+
+export type FuzzyFileSearchResponse = {
+	files: FuzzyFileSearchResult[];
+};
 
 export interface RpcNotification {
 	method: string;

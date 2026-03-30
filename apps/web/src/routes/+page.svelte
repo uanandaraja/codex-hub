@@ -16,6 +16,7 @@
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
 	import type {
 		PromptAttachmentDraft,
+		PromptFileMentionDraft,
 		PromptSubmitPayload
 	} from '$lib/components/prompt-input.types';
 	import type { PageData } from './$types';
@@ -113,6 +114,7 @@
 	let banner = $state<string | null>(initialBanner);
 	let composer = $state('');
 	let composerAttachments = $state<PromptAttachmentDraft[]>([]);
+	let composerMentions = $state<PromptFileMentionDraft[]>([]);
 	let notificationPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
 	let activeTurnIdsByThread = $state<Record<string, string>>({});
 	let activeTurnStartedAtByThread = $state<Record<string, number>>({});
@@ -844,6 +846,7 @@
 			if (firstPrompt && promptHasContent(firstPrompt)) {
 				composer = firstPrompt.message;
 				composerAttachments = firstPrompt.attachments;
+				composerMentions = firstPrompt.mentions;
 			}
 			banner = error instanceof Error ? error.message : 'Failed to create chat.';
 			return null;
@@ -858,7 +861,11 @@
 	}
 
 	async function sendMessage(
-		submitPayload: PromptSubmitPayload = { message: composer, attachments: composerAttachments }
+		submitPayload: PromptSubmitPayload = {
+			message: composer,
+			attachments: composerAttachments,
+			mentions: composerMentions
+		}
 	): Promise<void> {
 		const prompt = normalizePromptSubmit(submitPayload);
 		if (!promptHasContent(prompt) || !selectedProjectPath) {
@@ -867,6 +874,7 @@
 
 		composer = '';
 		composerAttachments = [];
+		composerMentions = [];
 
 		if (!selectedThreadId) {
 			await createThread(selectedProjectPath, prompt);
@@ -887,6 +895,15 @@
 			if (prompt.attachments.length > 0) {
 				const formData = new FormData();
 				formData.set('message', prompt.message);
+				formData.set(
+					'mentions',
+					JSON.stringify(
+						prompt.mentions.map((mention) => ({
+							name: mention.name,
+							path: mention.absolutePath
+						}))
+					)
+				);
 				if (selectedModelSummary?.model) {
 					formData.set('model', selectedModelSummary.model);
 				}
@@ -912,6 +929,10 @@
 					},
 					body: JSON.stringify({
 						message: prompt.message,
+						mentions: prompt.mentions.map((mention) => ({
+							name: mention.name,
+							path: mention.absolutePath
+						})),
 						model: selectedModelSummary?.model ?? undefined,
 						effort: selectedEffort,
 						mode: selectedMode,
@@ -927,6 +948,7 @@
 			restoreOptimisticUserTurn(threadId, optimisticState);
 			composer = prompt.message;
 			composerAttachments = prompt.attachments;
+			composerMentions = prompt.mentions;
 			clearThreadActiveTurn(threadId);
 			banner = error instanceof Error ? error.message : 'Failed to send message.';
 		}
@@ -1839,24 +1861,34 @@
 	}
 
 	function normalizePromptSubmit(payload: PromptSubmitPayload): PromptSubmitPayload {
+		const message = payload.message.trim();
 		return {
-			message: payload.message.trim(),
-			attachments: [...payload.attachments]
+			message,
+			attachments: [...payload.attachments],
+			mentions: payload.mentions.filter((mention) => message.includes(mention.token))
 		};
 	}
 
 	function promptHasContent(payload: PromptSubmitPayload): boolean {
-		return payload.message.length > 0 || payload.attachments.length > 0;
+		return payload.message.length > 0 || payload.attachments.length > 0 || payload.mentions.length > 0;
 	}
 
 	function describeImageAttachments(count: number): string {
 		return count === 1 ? '1 image attached' : `${count} images attached`;
 	}
 
+	function describeFileMentions(count: number): string {
+		return count === 1 ? '1 file mentioned' : `${count} files mentioned`;
+	}
+
 	function promptPreview(payload: PromptSubmitPayload): string {
 		return (
 			trimLine(payload.message) ||
-			(payload.attachments.length > 0 ? describeImageAttachments(payload.attachments.length) : '')
+			(payload.attachments.length > 0
+				? describeImageAttachments(payload.attachments.length)
+				: payload.mentions.length > 0
+					? describeFileMentions(payload.mentions.length)
+					: '')
 		);
 	}
 
@@ -2050,6 +2082,11 @@
 							}
 						]
 					: []),
+				...prompt.mentions.map((mention) => ({
+					type: 'mention',
+					name: mention.name,
+					path: mention.absolutePath
+				})),
 				...prompt.attachments.map((attachment) => ({
 					type: 'image',
 					url: attachment.previewUrl
@@ -2746,11 +2783,13 @@
 				<PromptInput
 					bind:value={composer}
 					bind:attachments={composerAttachments}
+					bind:mentions={composerMentions}
 					bind:selectedModel
 					bind:selectedEffort
 					bind:selectedMode
 					bind:selectedPermissionPreset
 					{models}
+					projectPath={selectedProjectPath}
 					placeholder="enter your message"
 					disabled={!selectedProjectPath}
 					isStreaming={selectedActiveTurnId !== null}

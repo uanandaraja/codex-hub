@@ -39,10 +39,24 @@ async function readTurnBody(request: Request): Promise<Record<string, unknown>> 
 		mode: readOptionalString(formData.get('mode')),
 		approvalPolicy: readOptionalString(formData.get('approvalPolicy')),
 		sandbox: readOptionalString(formData.get('sandbox')),
+		mentions: readMentionArray(formData.get('mentions')),
 		attachments
 	};
 }
 
 function readOptionalString(value: FormDataEntryValue | null): string | null {
 	return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function readMentionArray(value: FormDataEntryValue | null): unknown[] {
+	if (typeof value !== 'string' || !value.trim()) {
+		return [];
+	}
+
+	try {
+		const parsed = JSON.parse(value);
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
 }

@@ -4,7 +4,7 @@ import { createReadStream } from 'node:fs';
 import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { createServer, IncomingMessage, ServerResponse } from 'node:http';
 import { homedir } from 'node:os';
-import { extname, join, relative, resolve } from 'node:path';
+import { basename, extname, join, relative, resolve } from 'node:path';
 import { createInterface } from 'node:readline';
 import { URL } from 'node:url';
 import { CodexAppServerBridge, JsonRpcError } from './codex-app-server';
@@ -16,6 +16,7 @@ import type {
 	DirectoryEntry,
 	DirectoryListingResponse,
 	FileContentsResponse,
+	FuzzyFileSearchResponse,
 	GatewayAccountRateLimitWindow,
 	GatewayAccountStatus,
 	GatewayConfig,
@@ -60,6 +61,11 @@ type TurnImageUpload = {
 	name: string;
 	type: string;
 	dataBase64: string;
+};
+
+type TurnFileMention = {
+	name: string;
+	path: string;
 };
 
 const config: GatewayConfig = {
@@ -221,9 +227,10 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 			const body = await readJsonBody(request);
 			const message = readOptionalString(body.message)?.trim() ?? null;
 			const attachments = readTurnImageUploads(body.attachments);
-			if (!message && attachments.length === 0) {
+			const mentions = readTurnFileMentions(body.mentions);
+			if (!message && attachments.length === 0 && mentions.length === 0) {
 				return sendJson(response, 400, {
-					error: { message: 'message or image attachment is required' },
+					error: { message: 'message, file mention, or image attachment is required' },
 				});
 			}
 
@@ -241,6 +248,11 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 							},
 						]
 					: []),
+				...mentions.map((mention) => ({
+					type: 'mention',
+					name: mention.name,
+					path: mention.path,
+				})),
 				...(await persistTurnImageUploads(threadId, attachments)),
 			];
 			const result = await bridge.request<Record<string, unknown>>('turn/start', {
@@ -254,6 +266,28 @@ async function handleRequest(request: IncomingMessage, response: ServerResponse)
 				collaborationMode,
 			});
 			return sendJson(response, 202, result);
+		}
+
+		if (method === 'GET' && pathname === '/v1/fuzzy-file-search') {
+			await bridge.ensureReady();
+			const query = readOptionalString(url.searchParams.get('query'));
+			const roots = url.searchParams
+				.getAll('root')
+				.map((root) => bridge.resolvePath(root))
+				.filter((root, index, list) => root.length > 0 && list.indexOf(root) === index);
+
+			if (!query || roots.length === 0) {
+				return sendJson(response, 400, {
+					error: { message: 'query and root are required' },
+				});
+			}
+
+			const result = await bridge.request<FuzzyFileSearchResponse>('fuzzyFileSearch', {
+				query,
+				roots,
+				cancellationToken: null,
+			});
+			return sendJson(response, 200, result);
 		}
 
 		const threadServerRequestsMatch = pathname.match(/^\/v1\/threads\/([^/]+)\/server-requests$/);
@@ -696,6 +730,32 @@ function readTurnImageUploads(value: unknown): TurnImageUpload[] {
 			name,
 			type,
 			dataBase64,
+		};
+	});
+}
+
+function readTurnFileMentions(value: unknown): TurnFileMention[] {
+	if (value === undefined || value === null) {
+		return [];
+	}
+
+	if (!Array.isArray(value)) {
+		throw new Error('mentions must be an array');
+	}
+
+	return value.map((entry, index) => {
+		if (!entry || typeof entry !== 'object') {
+			throw new Error(`mention ${index + 1} is invalid`);
+		}
+
+		const path = readOptionalString((entry as Record<string, unknown>).path);
+		if (!path) {
+			throw new Error(`mention ${index + 1} is missing a path`);
+		}
+
+		return {
+			name: readOptionalString((entry as Record<string, unknown>).name) ?? basename(path),
+			path: bridge.resolvePath(path),
 		};
 	});
 }

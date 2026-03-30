@@ -187,3 +187,18 @@ export interface FileContentsResponse {
 	byteLength: number;
 	modifiedAtMs: number;
 }
+
+export type FuzzyFileSearchMatchType = 'file' | 'directory';
+
+export type FuzzyFileSearchResult = {
+	root: string;
+	path: string;
+	match_type: FuzzyFileSearchMatchType;
+	file_name: string;
+	score: number;
+	indices: number[] | null;
+};
+
+export type FuzzyFileSearchResponse = {
+	files: FuzzyFileSearchResult[];
+};
