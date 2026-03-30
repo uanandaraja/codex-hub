@@ -1,4 +1,5 @@
 import { gatewayJson } from '$lib/server/gateway';
+import { isEditorConfigured } from '$lib/server/editor';
 import type {
 	CodexThread,
 	GatewayStatus,
@@ -74,6 +75,7 @@ export const load: PageServerLoad = async ({ url }) => {
 
 	return {
 		status: statusResult.status === 'fulfilled' ? statusResult.value : null,
+		editorEnabled: isEditorConfigured(),
 		projects: projectsResult.status === 'fulfilled' ? projectsResult.value.data : [],
 		models: modelsResult.status === 'fulfilled' ? modelsResult.value.data : [],
 		threads,

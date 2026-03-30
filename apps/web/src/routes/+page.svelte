@@ -8,6 +8,7 @@
 		SpinnerGapIcon,
 		XIcon
 	} from 'phosphor-svelte';
+	import vscodeLogo from '$lib/assets/vscode.svg';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
@@ -61,6 +62,7 @@
 	const initialModels = untrack(() => sortModels(data.models));
 	const initialProjects = untrack(() => sortProjects(data.projects));
 	const initialThreads = untrack(() => sortThreads(data.threads));
+	const editorEnabled = untrack(() => data.editorEnabled);
 	const initialBanner = untrack(
 		() =>
 			data.errors.status ??
@@ -135,6 +137,8 @@
 
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
+	const toolbarLinkClass =
+		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 font-mono text-[0.74rem] uppercase tracking-[0.16em] text-fg backdrop-blur-sm transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent min-[821px]:inline-flex';
 	const projectRowClass =
 		'flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg';
 	const projectExpandButtonClass =
@@ -223,6 +227,11 @@
 	);
 	const selectedThreadInterrupting = $derived.by(() =>
 		Boolean(selectedThreadId && interruptingTurnsByThread[selectedThreadId])
+	);
+	const selectedEditorHref = $derived.by(() =>
+		editorEnabled && selectedThreadId
+			? `/api/threads/${encodeURIComponent(selectedThreadId)}/editor`
+			: null
 	);
 	const activeTurnElapsedSeconds = $derived.by(() =>
 		selectedActiveTurnStartedAt === null
@@ -2616,20 +2625,33 @@
 		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
 	>
 		<div
-			class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] min-[821px]:right-auto min-[821px]:left-[1.1rem] min-[821px]:px-0"
+			class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]"
 		>
-			<div
-				class="mx-auto flex w-full max-w-[680px] items-center min-[821px]:mx-0 min-[821px]:w-auto min-[821px]:max-w-none"
-			>
-				<button
-					class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
-					type="button"
-					onclick={toggleSidebar}
-					aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
-					aria-expanded={sidebarOpen}
-				>
-					<ListIcon size={18} />
-				</button>
+			<div class="flex w-full items-center justify-between gap-3">
+				<div class="min-w-0">
+					<button
+						class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
+						type="button"
+						onclick={toggleSidebar}
+						aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
+						aria-expanded={sidebarOpen}
+					>
+						<ListIcon size={18} />
+					</button>
+				</div>
+
+				{#if selectedEditorHref}
+					<a
+						class={toolbarLinkClass}
+						href={selectedEditorHref}
+						target="_blank"
+						rel="noreferrer"
+						aria-label="Open current thread project in editor"
+					>
+						<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
+						<span>Open Editor</span>
+					</a>
+				{/if}
 			</div>
 		</div>
 
