@@ -1,7 +1,6 @@
 <script lang="ts">
 	import { Streamdown } from 'svelte-streamdown';
-	import Code from 'svelte-streamdown/code';
-	import { shikiLanguages, shikiTheme, shikiThemes, streamdownTheme } from '$lib/streamdown/config';
+	import { streamdownTheme } from '$lib/streamdown/config';
 	import TurnStatusNote from '$lib/components/TurnStatusNote.svelte';
 
 	let {
@@ -56,10 +55,6 @@
 					parseIncompleteMarkdown={streaming}
 					controls={{ code: false, mermaid: false, table: false }}
 					theme={streamdownTheme}
-					{shikiLanguages}
-					{shikiThemes}
-					{shikiTheme}
-					components={{ code: Code }}
 					class="min-w-0"
 				/>
 			</div>
