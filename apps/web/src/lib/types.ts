@@ -133,6 +133,7 @@ export interface ThreadUsageResponse {
 export interface ThreadReadResponse {
 	thread: CodexThread;
 	usage: ThreadUsageResponse;
+	truncatedTurnCount: number;
 }
 
 export interface ThreadNameGenerateResponse {

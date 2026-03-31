@@ -53,7 +53,7 @@
 			<div class="min-w-0 overflow-hidden">
 				<Streamdown
 					{content}
-					parseIncompleteMarkdown
+					parseIncompleteMarkdown={streaming}
 					controls={{ code: false, mermaid: false, table: false }}
 					theme={streamdownTheme}
 					{shikiLanguages}

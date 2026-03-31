@@ -11,6 +11,8 @@ import type {
 } from '$lib/types';
 import type { PageServerLoad } from './$types';
 
+const INITIAL_THREAD_TAIL_TURNS = 24;
+
 export const load: PageServerLoad = async ({ url }) => {
 	const [statusResult, projectsResult, modelsResult] = await Promise.allSettled([
 		gatewayJson<GatewayStatus>('/v1/status'),
@@ -22,15 +24,17 @@ export const load: PageServerLoad = async ({ url }) => {
 	const requestedThreadId = url.searchParams.get('thread');
 	const availableProjects = projectsResult.status === 'fulfilled' ? projectsResult.value.data : [];
 	const initialProjectPath =
-		requestedProjectPath && availableProjects.some((project) => project.path === requestedProjectPath)
+		requestedProjectPath &&
+		availableProjects.some((project) => project.path === requestedProjectPath)
 			? requestedProjectPath
-			: availableProjects[0]?.path ?? null;
+			: (availableProjects[0]?.path ?? null);
 
 	let threads: ThreadListResponse['data'] = [];
 	let threadsError: string | null = null;
 	let initialThreadId: string | null = null;
 	let initialThread: CodexThread | null = null;
 	let initialThreadUsage: ThreadReadResponse['usage']['turns'] = {};
+	let initialThreadTruncatedTurnCount = 0;
 	let pendingRequests: PendingServerRequestListResponse['data'] = [];
 
 	if (initialProjectPath) {
@@ -52,24 +56,23 @@ export const load: PageServerLoad = async ({ url }) => {
 	}
 
 	if (initialThreadId) {
-		try {
-			const threadResult = await gatewayJson<ThreadReadResponse>(
-				`/v1/threads/${encodeURIComponent(initialThreadId)}?includeTurns=true`
-			);
-			initialThread = threadResult.thread;
-			initialThreadUsage = threadResult.usage.turns;
-		} catch {
-			// Keep the page usable even if the thread read fails.
+		const [threadResult, pendingRequestsResult] = await Promise.allSettled([
+			gatewayJson<ThreadReadResponse>(
+				`/v1/threads/${encodeURIComponent(initialThreadId)}?includeTurns=true&includeUsage=false&tailTurns=${INITIAL_THREAD_TAIL_TURNS}`
+			),
+			gatewayJson<PendingServerRequestListResponse>(
+				`/v1/threads/${encodeURIComponent(initialThreadId)}/server-requests`
+			)
+		]);
+
+		if (threadResult.status === 'fulfilled') {
+			initialThread = threadResult.value.thread;
+			initialThreadUsage = threadResult.value.usage.turns;
+			initialThreadTruncatedTurnCount = threadResult.value.truncatedTurnCount;
 		}
 
-		try {
-			pendingRequests = (
-				await gatewayJson<PendingServerRequestListResponse>(
-					`/v1/threads/${encodeURIComponent(initialThreadId)}/server-requests`
-				)
-			).data;
-		} catch {
-			// Keep the page usable even if the pending request read fails.
+		if (pendingRequestsResult.status === 'fulfilled') {
+			pendingRequests = pendingRequestsResult.value.data;
 		}
 	}
 
@@ -81,6 +84,7 @@ export const load: PageServerLoad = async ({ url }) => {
 		threads,
 		initialThread,
 		initialThreadUsage,
+		initialThreadTruncatedTurnCount,
 		initialPendingRequests: pendingRequests,
 		initialProjectPath,
 		initialThreadId,
@@ -97,8 +101,7 @@ export const load: PageServerLoad = async ({ url }) => {
 				modelsResult.status === 'rejected'
 					? 'Model list could not be loaded. Using fallback prompt settings.'
 					: null,
-			threads:
-				threadsError
+			threads: threadsError
 		}
 	};
 };

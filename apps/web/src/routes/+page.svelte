@@ -52,11 +52,16 @@
 		alt: string;
 	};
 	type PromptDraft = PromptSubmitPayload;
+	type FetchThreadOptions = {
+		fullHistory?: boolean;
+		includeUsage?: boolean;
+	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
 	const DESKTOP_SIDEBAR_OPEN_KEY = 'codex-hub.desktop-sidebar-open';
 	const THREAD_PERMISSION_PRESETS_KEY = 'codex-hub.thread-permission-presets';
 	const THREAD_NAME_BACKFILL_KEY = 'codex-hub.thread-name-backfill-v2';
+	const INITIAL_THREAD_TAIL_TURNS = 24;
 
 	let { data } = $props<{ data: PageData }>();
 
@@ -81,6 +86,7 @@
 	);
 	const initialDetailedThread = untrack(() => data.initialThread ?? null);
 	const initialThreadUsage = untrack(() => data.initialThreadUsage ?? {});
+	const initialThreadTruncatedTurnCount = untrack(() => data.initialThreadTruncatedTurnCount ?? 0);
 	const initialPendingRequests = untrack(() => data.initialPendingRequests ?? []);
 
 	let status = $state<GatewayStatus | null>(initialStatus);
@@ -95,6 +101,11 @@
 	);
 	let threadUsageByThread = $state<Record<string, ThreadReadResponse['usage']['turns']>>(
 		initialThreadId ? { [initialThreadId]: initialThreadUsage } : {}
+	);
+	let threadTruncatedTurnCountByThread = $state<Record<string, number>>(
+		initialThreadId && initialThreadTruncatedTurnCount > 0
+			? { [initialThreadId]: initialThreadTruncatedTurnCount }
+			: {}
 	);
 	let namingThreadIds = $state<Record<string, boolean>>({});
 	let pendingRequestsByThread = $state<Record<string, PendingServerRequest[]>>(
@@ -137,8 +148,11 @@
 	let syncedComposerDraftKey: string | null = null;
 	let notifiedRequestIds = $state<Record<string, true>>({});
 	let notifiedTurnEvents = $state<Record<string, true>>({});
+	let fullHistoryThreadIds = $state<Record<string, true>>({});
+	let loadingFullHistoryThreadIds = $state<Record<string, true>>({});
 	const threadEventSources = new Map<string, EventSource>();
 	const threadEventsReadyByThread = new Map<string, Promise<void>>();
+	let suppressNextAutoScroll = false;
 
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
@@ -203,6 +217,9 @@
 	);
 	const currentThreadUsage = $derived.by<ThreadReadResponse['usage']['turns']>(() =>
 		selectedThreadId ? (threadUsageByThread[selectedThreadId] ?? {}) : {}
+	);
+	const currentThreadTruncatedTurnCount = $derived.by(() =>
+		selectedThreadId ? (threadTruncatedTurnCountByThread[selectedThreadId] ?? 0) : 0
 	);
 
 	const renderedConversationEntries = $derived.by<RenderedConversationEntry[]>(() =>
@@ -272,7 +289,9 @@
 		}
 
 		syncedComposerDraftKey = draftKey;
-		applyComposerDraft(draftKey ? promptDraftsByKey[draftKey] ?? emptyPromptDraft() : emptyPromptDraft());
+		applyComposerDraft(
+			draftKey ? (promptDraftsByKey[draftKey] ?? emptyPromptDraft()) : emptyPromptDraft()
+		);
 	});
 
 	$effect(() => {
@@ -449,6 +468,10 @@
 	$effect(() => {
 		void renderedConversationEntries;
 		void activeQuestionRequests;
+		if (suppressNextAutoScroll) {
+			suppressNextAutoScroll = false;
+			return;
+		}
 		void scrollConversationToBottom();
 	});
 
@@ -668,6 +691,26 @@
 		selectedThreadId = threadId;
 		pruneInactiveThreadEventSubscriptions();
 		try {
+			const fetchTasks: Promise<void>[] = [];
+			if (!(threadId in threadDetails)) {
+				fetchTasks.push(fetchThread(threadId));
+			}
+			if (!(threadId in pendingRequestsByThread)) {
+				fetchTasks.push(fetchPendingRequests(threadId));
+			}
+			void ensureThreadLive(threadId);
+			if (fetchTasks.length > 0) {
+				await Promise.all(fetchTasks);
+			}
+			void refreshThreadUsage(threadId);
+			banner = null;
+		} catch (error) {
+			banner = error instanceof Error ? error.message : 'Failed to open chat.';
+		}
+	}
+
+	async function ensureThreadLive(threadId: string): Promise<void> {
+		try {
 			await ensureThreadEvents(threadId);
 			await api(`/api/threads/${encodeURIComponent(threadId)}/resume`, {
 				method: 'POST',
@@ -676,30 +719,33 @@
 				},
 				body: JSON.stringify({})
 			});
-			await Promise.all([fetchThread(threadId), fetchPendingRequests(threadId)]);
-			banner = null;
-		} catch (error) {
-			banner = error instanceof Error ? error.message : 'Failed to open chat.';
+		} catch {
+			// Keep the thread readable even if the live event connection is not ready yet.
 		}
 	}
 
-	async function fetchThread(threadId: string): Promise<void> {
-		const result = await api<ThreadReadResponse>(
-			`/api/threads/${encodeURIComponent(threadId)}?includeTurns=true`
-		);
+	async function fetchThread(threadId: string, options: FetchThreadOptions = {}): Promise<void> {
+		const result = await api<ThreadReadResponse>(buildThreadReadPath(threadId, options));
 		threadDetails = {
 			...threadDetails,
 			[threadId]: result.thread
 		};
+		setThreadTruncatedTurnCount(threadId, result.truncatedTurnCount);
+		if (options.fullHistory) {
+			setThreadHistoryExpanded(threadId, true);
+		}
 		if (threads.some((thread) => thread.id === threadId)) {
+			const threadSummary = compactThreadSummary(result.thread);
 			threads = sortThreads(
-				threads.map((thread) => (thread.id === threadId ? { ...thread, ...result.thread } : thread))
+				threads.map((thread) => (thread.id === threadId ? { ...thread, ...threadSummary } : thread))
 			);
 		}
-		threadUsageByThread = {
-			...threadUsageByThread,
-			[threadId]: result.usage.turns
-		};
+		if (options.includeUsage) {
+			threadUsageByThread = {
+				...threadUsageByThread,
+				[threadId]: result.usage.turns
+			};
+		}
 	}
 
 	async function fetchProjectThreads(projectPath: string): Promise<CodexThread[]> {
@@ -877,7 +923,7 @@
 			});
 
 			threads = sortThreads([
-				result.thread,
+				compactThreadSummary(result.thread),
 				...threads.filter((thread) => thread.id !== result.thread.id)
 			]);
 			threadDetails = {
@@ -1195,6 +1241,7 @@
 				tasks.push(fetchThread(threadId));
 			}
 			await Promise.all(tasks);
+			void refreshThreadUsage(threadId);
 		} catch (error) {
 			if (threadId === selectedThreadId) {
 				banner = error instanceof Error ? error.message : 'Failed to finalize chat.';
@@ -1234,7 +1281,11 @@
 		}
 
 		const normalizedStatus = normalizeTurnStatus(thread.status);
-		return normalizedStatus === 'inprogress' || normalizedStatus === 'running' || normalizedStatus === 'active';
+		return (
+			normalizedStatus === 'inprogress' ||
+			normalizedStatus === 'running' ||
+			normalizedStatus === 'active'
+		);
 	}
 
 	function projectChatCount(projectPath: string): number {
@@ -1396,7 +1447,11 @@
 				requestKey
 			);
 		} else {
-			notified = notifyBrowser('Action needed', `${threadLabel} is waiting for your input.`, requestKey);
+			notified = notifyBrowser(
+				'Action needed',
+				`${threadLabel} is waiting for your input.`,
+				requestKey
+			);
 		}
 
 		if (!notified) {
@@ -1418,7 +1473,11 @@
 		const threadLabel = threadNotificationLabel(threadId);
 		let notified = false;
 		if (turnStatus === 'completed') {
-			notified = notifyBrowser('Assistant finished', `${threadLabel} has a new reply ready.`, eventKey);
+			notified = notifyBrowser(
+				'Assistant finished',
+				`${threadLabel} has a new reply ready.`,
+				eventKey
+			);
 		} else if (turnStatus === 'interrupted') {
 			notified = notifyBrowser(
 				'Assistant interrupted',
@@ -1747,6 +1806,86 @@
 		return [...list].sort((left, right) => left.createdAt - right.createdAt);
 	}
 
+	function compactThreadSummary(thread: CodexThread): CodexThread {
+		return {
+			...thread,
+			turns: []
+		};
+	}
+
+	function buildThreadReadPath(threadId: string, options: FetchThreadOptions = {}): string {
+		const searchParams = new URLSearchParams({
+			includeTurns: 'true',
+			includeUsage: options.includeUsage ? 'true' : 'false'
+		});
+		const shouldLoadFullHistory = options.fullHistory ?? Boolean(fullHistoryThreadIds[threadId]);
+		if (!shouldLoadFullHistory) {
+			searchParams.set('tailTurns', `${INITIAL_THREAD_TAIL_TURNS}`);
+		}
+		return `/api/threads/${encodeURIComponent(threadId)}?${searchParams.toString()}`;
+	}
+
+	function setThreadTruncatedTurnCount(threadId: string, truncatedTurnCount: number): void {
+		if (truncatedTurnCount > 0) {
+			threadTruncatedTurnCountByThread = {
+				...threadTruncatedTurnCountByThread,
+				[threadId]: truncatedTurnCount
+			};
+			return;
+		}
+
+		if (!(threadId in threadTruncatedTurnCountByThread)) {
+			return;
+		}
+
+		const next = { ...threadTruncatedTurnCountByThread };
+		delete next[threadId];
+		threadTruncatedTurnCountByThread = next;
+	}
+
+	function setThreadHistoryExpanded(threadId: string, expanded: boolean): void {
+		if (expanded) {
+			fullHistoryThreadIds = {
+				...fullHistoryThreadIds,
+				[threadId]: true
+			};
+			return;
+		}
+
+		if (!(threadId in fullHistoryThreadIds)) {
+			return;
+		}
+
+		const next = { ...fullHistoryThreadIds };
+		delete next[threadId];
+		fullHistoryThreadIds = next;
+	}
+
+	async function loadFullThreadHistory(): Promise<void> {
+		if (!selectedThreadId || currentThreadTruncatedTurnCount === 0) {
+			return;
+		}
+
+		const threadId = selectedThreadId;
+		loadingFullHistoryThreadIds = {
+			...loadingFullHistoryThreadIds,
+			[threadId]: true
+		};
+		suppressNextAutoScroll = true;
+		try {
+			await fetchThread(threadId, { fullHistory: true });
+			void refreshThreadUsage(threadId);
+			banner = null;
+		} catch (error) {
+			setThreadHistoryExpanded(threadId, false);
+			banner = error instanceof Error ? error.message : 'Failed to load full chat history.';
+		} finally {
+			const next = { ...loadingFullHistoryThreadIds };
+			delete next[threadId];
+			loadingFullHistoryThreadIds = next;
+		}
+	}
+
 	function resolveInitialModel(list: ModelSummary[]): string | null {
 		return list.find((model) => model.isDefault)?.model ?? list[0]?.model ?? null;
 	}
@@ -1963,7 +2102,9 @@
 	}
 
 	function promptHasContent(payload: PromptSubmitPayload): boolean {
-		return payload.message.length > 0 || payload.attachments.length > 0 || payload.mentions.length > 0;
+		return (
+			payload.message.length > 0 || payload.attachments.length > 0 || payload.mentions.length > 0
+		);
 	}
 
 	function describeImageAttachments(count: number): string {
@@ -2019,7 +2160,9 @@
 		return (
 			left.message === right.message &&
 			left.attachments.length === right.attachments.length &&
-			left.attachments.every((attachment, index) => attachment.id === right.attachments[index]?.id) &&
+			left.attachments.every(
+				(attachment, index) => attachment.id === right.attachments[index]?.id
+			) &&
 			left.mentions.length === right.mentions.length &&
 			left.mentions.every((mention, index) => mention.id === right.mentions[index]?.id)
 		);
@@ -2801,7 +2944,9 @@
 												}`}
 												aria-hidden="true"
 											></span>
-											<strong class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem] font-medium">
+											<strong
+												class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem] font-medium"
+											>
 												<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
 												{#if threadIsRunning(thread)}
 													<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
@@ -2830,9 +2975,7 @@
 	<main
 		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
 	>
-		<div
-			class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]"
-		>
+		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]">
 			<div class="flex w-full items-center justify-between gap-3">
 				<div class="min-w-0">
 					<button
@@ -2884,6 +3027,32 @@
 						<span>loading chat...</span>
 					</div>
 				{:else}
+					{#if currentThreadTruncatedTurnCount > 0}
+						<div
+							class="mb-4 flex flex-wrap items-center justify-between gap-3 border border-line bg-surface-1 px-[1rem] py-[0.9rem] text-[0.82rem] text-muted"
+						>
+							<div class="min-w-0">
+								<strong class="block text-fg">Showing recent history</strong>
+								<span>
+									Loaded the latest {currentThread?.turns.length ?? 0} turns. {currentThreadTruncatedTurnCount}
+									older turn{currentThreadTruncatedTurnCount === 1 ? '' : 's'} hidden.
+								</span>
+							</div>
+							<button
+								type="button"
+								class="inline-flex h-10 shrink-0 items-center justify-center border border-line px-4 font-mono text-[0.74rem] uppercase tracking-[0.12em] text-fg transition-[border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-50"
+								onclick={() => void loadFullThreadHistory()}
+								disabled={Boolean(
+									selectedThreadId && loadingFullHistoryThreadIds[selectedThreadId]
+								)}
+							>
+								{selectedThreadId && loadingFullHistoryThreadIds[selectedThreadId]
+									? 'loading...'
+									: 'load full history'}
+							</button>
+						</div>
+					{/if}
+
 					{#each renderedConversationEntries as entry (entry.item.id)}
 						{#if entry.item.type === 'userMessage'}
 							<ChatMessage
