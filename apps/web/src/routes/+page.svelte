@@ -145,13 +145,13 @@
 	const toolbarLinkClass =
 		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 font-mono text-[0.74rem] uppercase tracking-[0.16em] text-fg backdrop-blur-sm transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent min-[821px]:inline-flex';
 	const projectRowClass =
-		'flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg';
+		'flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg transition-[background-color,border-color] duration-150';
 	const projectExpandButtonClass =
 		'inline-flex h-9 w-9 shrink-0 items-center justify-center border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg';
 	const projectSelectButtonClass =
 		'flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent py-[0.95rem] pr-[1.1rem] text-left text-fg';
 	const chatRowClass =
-		'flex w-full min-w-0 items-center border-0 border-l-2 border-l-transparent bg-transparent px-[1.1rem] py-[0.78rem] pl-[1.85rem] text-left text-fg';
+		'group relative flex w-full min-w-0 items-center gap-3 border-0 border-l-[3px] border-l-transparent bg-transparent px-[1.1rem] py-[0.82rem] pl-[1.85rem] text-left text-fg transition-[background-color,border-color,color] duration-150 hover:bg-surface-2/55';
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
@@ -940,6 +940,7 @@
 		if (!promptHasContent(prompt) || !selectedProjectPath) {
 			return;
 		}
+		void ensureBrowserNotificationPermission();
 
 		composer = '';
 		composerAttachments = [];
@@ -1167,8 +1168,8 @@
 
 		if (notification.method === 'turn/completed') {
 			const turnId = readTurnId(notification.params);
-			const turnStatus = readTurnStatus(notification.params);
-			if (turnId && turnStatus) {
+			const turnStatus = readTurnStatus(notification.params) ?? 'completed';
+			if (turnId) {
 				updateTurnStatus(threadId, turnId, turnStatus);
 				const startedAt = activeTurnStartedAtByThread[threadId] ?? null;
 				if (turnStatus === 'interrupted' && startedAt !== null) {
@@ -1344,10 +1345,10 @@
 		return document.visibilityState !== 'visible' || !document.hasFocus();
 	}
 
-	function notifyBrowser(title: string, body: string, tag: string): void {
+	function notifyBrowser(title: string, body: string, tag: string): boolean {
 		syncNotificationPermission();
 		if (!shouldSendBrowserNotification()) {
-			return;
+			return false;
 		}
 
 		const notification = new Notification(title, {
@@ -1360,6 +1361,8 @@
 			window.focus();
 			notification.close();
 		};
+
+		return true;
 	}
 
 	function threadNotificationLabel(threadId: string): string {
@@ -1374,27 +1377,36 @@
 			return;
 		}
 
-		notifiedRequestIds = {
-			...notifiedRequestIds,
-			[requestKey]: true
-		};
-
 		const threadLabel = threadNotificationLabel(threadId);
+		let notified = false;
 		if (request.method === 'item/tool/requestUserInput') {
-			notifyBrowser('Follow-up needed', `${threadLabel} is waiting for your answer.`, requestKey);
-			return;
-		}
-
-		if (
+			notified = notifyBrowser(
+				'Follow-up needed',
+				`${threadLabel} is waiting for your answer.`,
+				requestKey
+			);
+		} else if (
 			request.method === 'item/commandExecution/requestApproval' ||
 			request.method === 'item/fileChange/requestApproval' ||
 			request.method === 'item/permissions/requestApproval'
 		) {
-			notifyBrowser('Approval needed', `${threadLabel} is waiting for confirmation.`, requestKey);
+			notified = notifyBrowser(
+				'Approval needed',
+				`${threadLabel} is waiting for confirmation.`,
+				requestKey
+			);
+		} else {
+			notified = notifyBrowser('Action needed', `${threadLabel} is waiting for your input.`, requestKey);
+		}
+
+		if (!notified) {
 			return;
 		}
 
-		notifyBrowser('Action needed', `${threadLabel} is waiting for your input.`, requestKey);
+		notifiedRequestIds = {
+			...notifiedRequestIds,
+			[requestKey]: true
+		};
 	}
 
 	function maybeNotifyTurnEvent(threadId: string, turnId: string, turnStatus: string): void {
@@ -1403,25 +1415,32 @@
 			return;
 		}
 
+		const threadLabel = threadNotificationLabel(threadId);
+		let notified = false;
+		if (turnStatus === 'completed') {
+			notified = notifyBrowser('Assistant finished', `${threadLabel} has a new reply ready.`, eventKey);
+		} else if (turnStatus === 'interrupted') {
+			notified = notifyBrowser(
+				'Assistant interrupted',
+				`${threadLabel} stopped before finishing.`,
+				eventKey
+			);
+		} else if (turnStatus === 'failed' || turnStatus === 'error') {
+			notified = notifyBrowser(
+				'Assistant needs attention',
+				`${threadLabel} ended with an error.`,
+				eventKey
+			);
+		}
+
+		if (!notified) {
+			return;
+		}
+
 		notifiedTurnEvents = {
 			...notifiedTurnEvents,
 			[eventKey]: true
 		};
-
-		const threadLabel = threadNotificationLabel(threadId);
-		if (turnStatus === 'completed') {
-			notifyBrowser('Assistant finished', `${threadLabel} has a new reply ready.`, eventKey);
-			return;
-		}
-
-		if (turnStatus === 'interrupted') {
-			notifyBrowser('Assistant interrupted', `${threadLabel} stopped before finishing.`, eventKey);
-			return;
-		}
-
-		if (turnStatus === 'failed' || turnStatus === 'error') {
-			notifyBrowser('Assistant needs attention', `${threadLabel} ended with an error.`, eventKey);
-		}
 	}
 
 	function readString(value: unknown): string | null {
@@ -1457,11 +1476,15 @@
 
 	function readTurnStatus(params?: Record<string, unknown>): string | null {
 		const turn = params?.turn;
-		if (!turn || typeof turn !== 'object' || !('status' in turn)) {
-			return null;
+		if (turn && typeof turn === 'object' && 'status' in turn) {
+			return readStatusToken(turn.status);
 		}
 
-		return readString(turn.status);
+		return (
+			readStatusToken(params?.turnStatus) ??
+			readStatusToken(params?.status) ??
+			readStatusToken(params?.state)
+		);
 	}
 
 	function readTurnItem(params?: Record<string, unknown>): CodexThreadItem | null {
@@ -2765,9 +2788,19 @@
 											type="button"
 											class={chatRowClass}
 											class:border-l-accent={thread.id === selectedThreadId}
-											class:bg-surface-2={thread.id === selectedThreadId}
+											class:bg-[color:var(--surface-2)]={thread.id === selectedThreadId}
+											class:text-accent={thread.id === selectedThreadId}
 											onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
+											aria-current={thread.id === selectedThreadId ? 'page' : undefined}
 										>
+											<span
+												class={`h-2.5 w-2.5 shrink-0 rounded-full border transition-[transform,background-color,border-color,opacity] duration-150 ${
+													thread.id === selectedThreadId
+														? 'border-accent bg-accent opacity-100'
+														: 'border-line bg-transparent opacity-55 group-hover:opacity-80'
+												}`}
+												aria-hidden="true"
+											></span>
 											<strong class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem] font-medium">
 												<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
 												{#if threadIsRunning(thread)}
