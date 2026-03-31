@@ -2944,14 +2944,12 @@
 												}`}
 												aria-hidden="true"
 											></span>
-											<strong
-												class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem] font-medium"
-											>
-												<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
-												{#if threadIsRunning(thread)}
-													<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
-												{/if}
-											</strong>
+												<span class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem]">
+													<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
+													{#if threadIsRunning(thread)}
+														<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
+													{/if}
+												</span>
 										</button>
 									{/each}
 								{/if}
