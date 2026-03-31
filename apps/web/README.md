@@ -12,3 +12,6 @@ bun run check
 bun run build
 bun run start
 ```
+
+If you send image attachments, set `BODY_SIZE_LIMIT` in `apps/web/.env`. `@sveltejs/adapter-node`
+defaults to `512K`, which is easy to exceed with screenshots. The local default in this repo is `5M`.

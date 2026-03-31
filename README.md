@@ -117,6 +117,7 @@ Web:
 - `PORT`: default `4321`
 - `GATEWAY_BASE_URL`: default `http://127.0.0.1:8787`
 - `EDITOR_BASE_URL`: browser-reachable base URL for `code-server`; used by the thread-level "Open Editor" button
+- `BODY_SIZE_LIMIT`: request body cap for the SvelteKit node server; adapter-node defaults to `512K`, which is too small for image attachments. Set this higher, for example `5M`.
 
 ## Scripts
 
