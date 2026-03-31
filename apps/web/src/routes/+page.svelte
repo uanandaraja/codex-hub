@@ -51,6 +51,7 @@
 		src: string;
 		alt: string;
 	};
+	type PromptDraft = PromptSubmitPayload;
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
 	const DESKTOP_SIDEBAR_OPEN_KEY = 'codex-hub.desktop-sidebar-open';
@@ -115,6 +116,7 @@
 	let composer = $state('');
 	let composerAttachments = $state<PromptAttachmentDraft[]>([]);
 	let composerMentions = $state<PromptFileMentionDraft[]>([]);
+	let promptDraftsByKey = $state<Record<string, PromptDraft>>({});
 	let notificationPermission = $state<NotificationPermission | 'unsupported'>('unsupported');
 	let activeTurnIdsByThread = $state<Record<string, string>>({});
 	let activeTurnStartedAtByThread = $state<Record<string, number>>({});
@@ -132,6 +134,7 @@
 	let hasMounted = false;
 	let optimisticTurnCounter = 0;
 	let syncedPermissionThreadId: string | null | undefined = undefined;
+	let syncedComposerDraftKey: string | null = null;
 	let notifiedRequestIds = $state<Record<string, true>>({});
 	let notifiedTurnEvents = $state<Record<string, true>>({});
 	const threadEventSources = new Map<string, EventSource>();
@@ -235,6 +238,13 @@
 			? `/api/threads/${encodeURIComponent(selectedThreadId)}/editor`
 			: null
 	);
+	const selectedComposerDraftKey = $derived.by(() =>
+		selectedThreadId
+			? `thread:${selectedThreadId}`
+			: selectedProjectPath
+				? `project:${selectedProjectPath}`
+				: null
+	);
 	const activeTurnElapsedSeconds = $derived.by(() =>
 		selectedActiveTurnStartedAt === null
 			? 0
@@ -246,6 +256,36 @@
 			selectedActiveTurnId !== 'pending' &&
 			!selectedThreadInterrupting
 	);
+
+	$effect(() => {
+		const draftKey = selectedComposerDraftKey;
+		if (draftKey === syncedComposerDraftKey) {
+			return;
+		}
+
+		if (syncedComposerDraftKey) {
+			promptDraftsByKey = upsertPromptDraft(
+				promptDraftsByKey,
+				syncedComposerDraftKey,
+				readComposerDraft()
+			);
+		}
+
+		syncedComposerDraftKey = draftKey;
+		applyComposerDraft(draftKey ? promptDraftsByKey[draftKey] ?? emptyPromptDraft() : emptyPromptDraft());
+	});
+
+	$effect(() => {
+		if (!selectedComposerDraftKey || selectedComposerDraftKey !== syncedComposerDraftKey) {
+			return;
+		}
+
+		promptDraftsByKey = upsertPromptDraft(
+			promptDraftsByKey,
+			selectedComposerDraftKey,
+			readComposerDraft()
+		);
+	});
 
 	$effect(() => {
 		if (!selectedProjectPath && projects[0]) {
@@ -348,8 +388,31 @@
 		const handleViewportChange = (event: MediaQueryListEvent) => {
 			syncViewport(event.matches);
 		};
+		const handleNotificationPermissionGesture = () => {
+			if (notificationPermission !== 'default') {
+				removeNotificationPermissionGestureListeners();
+				return;
+			}
+
+			void ensureBrowserNotificationPermission().finally(() => {
+				if (notificationPermission !== 'default') {
+					removeNotificationPermissionGestureListeners();
+				}
+			});
+		};
+		const handleVisibilityChange = () => {
+			syncNotificationPermission();
+		};
+		const removeNotificationPermissionGestureListeners = () => {
+			window.removeEventListener('pointerdown', handleNotificationPermissionGesture, true);
+			window.removeEventListener('keydown', handleNotificationPermissionGesture, true);
+		};
 
 		mediaQuery.addEventListener('change', handleViewportChange);
+		window.addEventListener('pointerdown', handleNotificationPermissionGesture, true);
+		window.addEventListener('keydown', handleNotificationPermissionGesture, true);
+		window.addEventListener('focus', syncNotificationPermission);
+		document.addEventListener('visibilitychange', handleVisibilityChange);
 		const statusInterval = window.setInterval(() => {
 			void refreshStatusSnapshot();
 		}, 30_000);
@@ -368,8 +431,14 @@
 
 		return () => {
 			mediaQuery.removeEventListener('change', handleViewportChange);
+			removeNotificationPermissionGestureListeners();
+			window.removeEventListener('focus', syncNotificationPermission);
+			document.removeEventListener('visibilitychange', handleVisibilityChange);
 			window.clearInterval(statusInterval);
 			releaseAttachmentPreviews(composerAttachments);
+			for (const draft of Object.values(promptDraftsByKey)) {
+				releaseAttachmentPreviews(draft.attachments);
+			}
 			for (const attachments of Object.values(pendingAttachmentReleases)) {
 				releaseAttachmentPreviews(attachments);
 			}
@@ -1276,6 +1345,7 @@
 	}
 
 	function notifyBrowser(title: string, body: string, tag: string): void {
+		syncNotificationPermission();
 		if (!shouldSendBrowserNotification()) {
 			return;
 		}
@@ -1892,6 +1962,73 @@
 		);
 	}
 
+	function emptyPromptDraft(): PromptDraft {
+		return {
+			message: '',
+			attachments: [],
+			mentions: []
+		};
+	}
+
+	function readComposerDraft(): PromptDraft {
+		return {
+			message: composer,
+			attachments: [...composerAttachments],
+			mentions: [...composerMentions]
+		};
+	}
+
+	function clonePromptDraft(draft: PromptDraft): PromptDraft {
+		return {
+			message: draft.message,
+			attachments: [...draft.attachments],
+			mentions: [...draft.mentions]
+		};
+	}
+
+	function applyComposerDraft(draft: PromptDraft): void {
+		composer = draft.message;
+		composerAttachments = [...draft.attachments];
+		composerMentions = [...draft.mentions];
+	}
+
+	function samePromptDraft(left: PromptDraft, right: PromptDraft): boolean {
+		return (
+			left.message === right.message &&
+			left.attachments.length === right.attachments.length &&
+			left.attachments.every((attachment, index) => attachment.id === right.attachments[index]?.id) &&
+			left.mentions.length === right.mentions.length &&
+			left.mentions.every((mention, index) => mention.id === right.mentions[index]?.id)
+		);
+	}
+
+	function upsertPromptDraft(
+		drafts: Record<string, PromptDraft>,
+		key: string,
+		draft: PromptDraft
+	): Record<string, PromptDraft> {
+		if (!promptHasContent(draft)) {
+			if (!(key in drafts)) {
+				return drafts;
+			}
+
+			const next = { ...drafts };
+			delete next[key];
+			return next;
+		}
+
+		const normalized = clonePromptDraft(draft);
+		const existing = drafts[key];
+		if (existing && samePromptDraft(existing, normalized)) {
+			return drafts;
+		}
+
+		return {
+			...drafts,
+			[key]: normalized
+		};
+	}
+
 	function releaseAttachmentPreviews(attachments: PromptAttachmentDraft[]): void {
 		for (const attachment of attachments) {
 			URL.revokeObjectURL(attachment.previewUrl);
@@ -2317,8 +2454,7 @@
 		return (
 			entry.showStatusNote &&
 			selectedActiveTurnStartedAt !== null &&
-			isInProgressTurnStatus(entry.turnStatus) &&
-			isAgentMessageRenderItem(entry.item)
+			isInProgressTurnStatus(entry.turnStatus)
 		);
 	}
 

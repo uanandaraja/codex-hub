@@ -83,7 +83,7 @@
 
 	const isSending = $derived(isSubmitting);
 	const attachmentDisabled = $derived(disabled || isStreaming || isSubmitting || isInterrupting);
-	const editorDisabled = $derived(disabled || isStreaming || isSubmitting || isInterrupting);
+	const editorDisabled = $derived(disabled || isSubmitting || isInterrupting);
 	const sendDisabled = $derived(
 		disabled ||
 			isStreaming ||
