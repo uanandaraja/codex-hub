@@ -3,7 +3,12 @@ import type { ThreadListResponse, ThreadStartResponse } from '$lib/types';
 import { json } from '@sveltejs/kit';
 
 export async function GET({ url }) {
-	const search = url.searchParams.toString();
+	const searchParams = new URLSearchParams(url.searchParams);
+	if (!searchParams.has('archived')) {
+		searchParams.set('archived', 'false');
+	}
+
+	const search = searchParams.toString();
 	const suffix = search ? `?${search}` : '';
 	return json(await gatewayJson<ThreadListResponse>(`/v1/threads${suffix}`));
 }

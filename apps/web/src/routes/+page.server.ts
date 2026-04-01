@@ -16,7 +16,7 @@ const INITIAL_THREAD_TAIL_TURNS = 24;
 export const load: PageServerLoad = async ({ url }) => {
 	const [statusResult, projectsResult, modelsResult] = await Promise.allSettled([
 		gatewayJson<GatewayStatus>('/v1/status'),
-		gatewayJson<ProjectListResponse>('/v1/projects'),
+		gatewayJson<ProjectListResponse>('/v1/projects?archived=false'),
 		gatewayJson<ModelListResponse>('/v1/models')
 	]);
 
@@ -41,7 +41,7 @@ export const load: PageServerLoad = async ({ url }) => {
 		try {
 			threads = (
 				await gatewayJson<ThreadListResponse>(
-					`/v1/threads?projectPath=${encodeURIComponent(initialProjectPath)}`
+					`/v1/threads?projectPath=${encodeURIComponent(initialProjectPath)}&archived=false`
 				)
 			).data;
 		} catch {

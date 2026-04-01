@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
 	import {
+		ArchiveIcon,
 		CaretDownIcon,
 		CaretRightIcon,
 		ListIcon,
@@ -136,6 +137,7 @@
 		initialProjectPath ? { [initialProjectPath]: true } : {}
 	);
 	let loadingProjectThreadsByPath = $state<Record<string, true>>({});
+	let archivingThreadIds = $state<Record<string, true>>({});
 	let streamTickMs = $state(Date.now());
 	let turnElapsedSeconds = $state<Record<string, number>>({});
 	let conversationBody = $state<HTMLElement | null>(null);
@@ -166,6 +168,10 @@
 		'flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent py-[0.95rem] pr-[1.1rem] text-left text-fg';
 	const chatRowClass =
 		'group relative flex w-full min-w-0 items-center gap-3 border-0 border-l-[3px] border-l-transparent bg-transparent px-[1.1rem] py-[0.82rem] pl-[1.85rem] text-left text-fg transition-[background-color,border-color,color] duration-150 hover:bg-surface-2/55';
+	const chatSelectButtonClass =
+		'flex min-w-0 flex-1 items-center gap-3 border-0 bg-transparent py-[0.05rem] pr-1 text-left text-fg';
+	const threadArchiveButtonClass =
+		'pointer-events-none inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
@@ -675,6 +681,83 @@
 		interruptingTurnsByThread = next;
 	}
 
+	function setThreadArchiving(threadId: string): void {
+		archivingThreadIds = {
+			...archivingThreadIds,
+			[threadId]: true
+		};
+	}
+
+	function clearThreadArchiving(threadId: string): void {
+		if (!(threadId in archivingThreadIds)) {
+			return;
+		}
+
+		const next = { ...archivingThreadIds };
+		delete next[threadId];
+		archivingThreadIds = next;
+	}
+
+	function removeRecordEntry<T>(record: Record<string, T>, key: string): Record<string, T> {
+		if (!(key in record)) {
+			return record;
+		}
+
+		const next = { ...record };
+		delete next[key];
+		return next;
+	}
+
+	function removeThreadFromVisibleProject(projectPath: string, threadId: string): CodexThread[] {
+		const sourceThreads =
+			projectPath === selectedProjectPath ? threads : (projectThreadsByPath[projectPath] ?? []);
+		const nextVisibleThreads = sortThreads(
+			sourceThreads.filter((thread) => thread.id !== threadId)
+		);
+
+		if (projectPath === selectedProjectPath) {
+			threads = nextVisibleThreads;
+		}
+
+		const nextProjectThreadsByPath = { ...projectThreadsByPath };
+		if (nextVisibleThreads.length > 0) {
+			nextProjectThreadsByPath[projectPath] = nextVisibleThreads;
+		} else {
+			delete nextProjectThreadsByPath[projectPath];
+		}
+		projectThreadsByPath = nextProjectThreadsByPath;
+
+		const nextProjects = syncProjectSummary(projects, projectPath, nextVisibleThreads);
+		const projectStillVisible = nextProjects.some((project) => project.path === projectPath);
+		projects = nextProjects;
+
+		if (!projectStillVisible) {
+			expandedProjectPaths = removeRecordEntry(expandedProjectPaths, projectPath);
+			loadingProjectThreadsByPath = removeRecordEntry(loadingProjectThreadsByPath, projectPath);
+		}
+
+		return nextVisibleThreads;
+	}
+
+	function clearArchivedThreadLocalState(threadId: string): void {
+		closeThreadEvents(threadId);
+		threadDetails = removeRecordEntry(threadDetails, threadId);
+		threadUsageByThread = removeRecordEntry(threadUsageByThread, threadId);
+		threadTruncatedTurnCountByThread = removeRecordEntry(
+			threadTruncatedTurnCountByThread,
+			threadId
+		);
+		pendingRequestsByThread = removeRecordEntry(pendingRequestsByThread, threadId);
+		activeTurnIdsByThread = removeRecordEntry(activeTurnIdsByThread, threadId);
+		activeTurnStartedAtByThread = removeRecordEntry(activeTurnStartedAtByThread, threadId);
+		interruptingTurnsByThread = removeRecordEntry(interruptingTurnsByThread, threadId);
+		namingThreadIds = removeRecordEntry(namingThreadIds, threadId);
+		fullHistoryThreadIds = removeRecordEntry(fullHistoryThreadIds, threadId);
+		loadingFullHistoryThreadIds = removeRecordEntry(loadingFullHistoryThreadIds, threadId);
+		threadPermissionPresets = removeRecordEntry(threadPermissionPresets, threadId);
+		pendingAttachmentReleases = removeRecordEntry(pendingAttachmentReleases, threadId);
+	}
+
 	function threadHasActiveTurn(threadId: string): boolean {
 		return threadId in activeTurnIdsByThread;
 	}
@@ -897,6 +980,56 @@
 			await loadProjectThreads(projectPath, threadId);
 		}
 		await ensureThreadReady(threadId);
+	}
+
+	async function handleArchiveThread(
+		event: MouseEvent,
+		projectPath: string,
+		thread: CodexThread
+	): Promise<void> {
+		event.preventDefault();
+		event.stopPropagation();
+
+		if (threadIsRunning(thread) || archivingThreadIds[thread.id]) {
+			return;
+		}
+
+		const wasSelectedProject = projectPath === selectedProjectPath;
+		const wasSelectedThread = thread.id === selectedThreadId;
+		setThreadArchiving(thread.id);
+
+		try {
+			await api(`/api/threads/${encodeURIComponent(thread.id)}/archive`, {
+				method: 'POST'
+			});
+
+			const nextVisibleThreads = removeThreadFromVisibleProject(projectPath, thread.id);
+			clearArchivedThreadLocalState(thread.id);
+			banner = null;
+
+			if (!wasSelectedProject || !wasSelectedThread) {
+				return;
+			}
+
+			if (nextVisibleThreads[0]) {
+				await ensureThreadReady(nextVisibleThreads[0].id);
+				return;
+			}
+
+			const fallbackProjectPath = projects[0]?.path ?? null;
+			if (!fallbackProjectPath) {
+				selectedProjectPath = null;
+				selectedThreadId = null;
+				threads = [];
+				return;
+			}
+
+			await selectProject(fallbackProjectPath);
+		} catch (error) {
+			banner = error instanceof Error ? error.message : 'Failed to archive chat.';
+		} finally {
+			clearThreadArchiving(thread.id);
+		}
 	}
 
 	async function createThread(
@@ -2045,7 +2178,7 @@
 		threadList: CodexThread[]
 	): ProjectSummary[] {
 		if (threadList.length === 0) {
-			return projectList;
+			return sortProjects(projectList.filter((project) => project.path !== projectPath));
 		}
 
 		return sortProjects(
@@ -2925,34 +3058,52 @@
 									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
 										no chats yet
 									</div>
-								{:else}
-									{#each sidebarThreadsForProject(project.path) as thread (thread.id)}
-										<button
-											type="button"
-											class={chatRowClass}
-											class:border-l-accent={thread.id === selectedThreadId}
-											class:bg-[color:var(--surface-2)]={thread.id === selectedThreadId}
-											class:text-accent={thread.id === selectedThreadId}
-											onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
-											aria-current={thread.id === selectedThreadId ? 'page' : undefined}
-										>
-											<span
-												class={`h-2.5 w-2.5 shrink-0 rounded-full border transition-[transform,background-color,border-color,opacity] duration-150 ${
-													thread.id === selectedThreadId
-														? 'border-accent bg-accent opacity-100'
-														: 'border-line bg-transparent opacity-55 group-hover:opacity-80'
-												}`}
-												aria-hidden="true"
-											></span>
-												<span class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem]">
-													<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
-													{#if threadIsRunning(thread)}
-														<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
-													{/if}
-												</span>
-										</button>
-									{/each}
-								{/if}
+									{:else}
+										{#each sidebarThreadsForProject(project.path) as thread (thread.id)}
+											<div
+												class={chatRowClass}
+												class:border-l-accent={thread.id === selectedThreadId}
+												class:bg-[color:var(--surface-2)]={thread.id === selectedThreadId}
+												class:text-accent={thread.id === selectedThreadId}
+											>
+												<button
+													type="button"
+													class={chatSelectButtonClass}
+													onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
+													aria-current={thread.id === selectedThreadId ? 'page' : undefined}
+												>
+													<span
+														class={`h-2.5 w-2.5 shrink-0 rounded-full border transition-[transform,background-color,border-color,opacity] duration-150 ${
+															thread.id === selectedThreadId
+																? 'border-accent bg-accent opacity-100'
+																: 'border-line bg-transparent opacity-55 group-hover:opacity-80'
+														}`}
+														aria-hidden="true"
+													></span>
+													<span class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem]">
+														<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
+														{#if threadIsRunning(thread)}
+															<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
+														{/if}
+													</span>
+												</button>
+												<button
+													type="button"
+													class={threadArchiveButtonClass}
+													disabled={Boolean(archivingThreadIds[thread.id]) || threadIsRunning(thread)}
+													onclick={(event) => void handleArchiveThread(event, project.path, thread)}
+													aria-label={`Archive ${chatLabel(thread)}`}
+													title={
+														threadIsRunning(thread)
+															? 'Active chats cannot be archived'
+															: 'Archive chat'
+													}
+												>
+													<ArchiveIcon size={14} />
+												</button>
+											</div>
+										{/each}
+									{/if}
 							</div>
 						{/if}
 					</section>
