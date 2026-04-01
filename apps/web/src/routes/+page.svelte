@@ -6,6 +6,7 @@
 		CaretRightIcon,
 		ListIcon,
 		PlusIcon,
+		PushPinIcon,
 		SpinnerGapIcon,
 		XIcon
 	} from 'phosphor-svelte';
@@ -59,12 +60,14 @@
 	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
+	const PINNED_PROJECTS_KEY = 'codex-hub.pinned-projects';
 	const DESKTOP_SIDEBAR_OPEN_KEY = 'codex-hub.desktop-sidebar-open';
 	const THREAD_PERMISSION_PRESETS_KEY = 'codex-hub.thread-permission-presets';
 	const THREAD_NAME_BACKFILL_KEY = 'codex-hub.thread-name-backfill-v2';
 	const INITIAL_THREAD_TAIL_TURNS = 24;
 
 	let { data } = $props<{ data: PageData }>();
+	let pinnedProjectPaths = $state<Record<string, true>>({});
 
 	const initialStatus = untrack(() => data.status);
 	const initialModels = untrack(() => sortModels(data.models));
@@ -161,11 +164,15 @@
 	const toolbarLinkClass =
 		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 font-mono text-[0.74rem] uppercase tracking-[0.16em] text-fg backdrop-blur-sm transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent min-[821px]:inline-flex';
 	const projectRowClass =
-		'flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg transition-[background-color,border-color] duration-150';
+		'group flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg transition-[background-color,border-color] duration-150';
 	const projectExpandButtonClass =
 		'inline-flex h-9 w-9 shrink-0 items-center justify-center border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg';
 	const projectSelectButtonClass =
-		'flex min-w-0 flex-1 items-center justify-between gap-3 border-0 bg-transparent py-[0.95rem] pr-[1.1rem] text-left text-fg';
+		'flex min-w-0 flex-1 items-center border-0 bg-transparent py-[0.95rem] pr-2 text-left text-fg';
+	const projectCreateButtonClass =
+		'pointer-events-none mr-[0.55rem] inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color,background-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
+	const projectPinButtonClass =
+		'pointer-events-none inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color,background-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg';
 	const chatRowClass =
 		'group relative flex w-full min-w-0 items-center gap-3 border-0 border-l-[3px] border-l-transparent bg-transparent px-[1.1rem] py-[0.82rem] pl-[1.85rem] text-left text-fg transition-[background-color,border-color,color] duration-150 hover:bg-surface-2/55';
 	const chatSelectButtonClass =
@@ -395,6 +402,7 @@
 
 	onMount(() => {
 		restorePromptPreferences();
+		restorePinnedProjects();
 		restoreThreadPermissionPresets();
 		restoreDesktopSidebarPreference();
 		syncNotificationPermission();
@@ -526,6 +534,14 @@
 		}
 
 		persistPromptPreferences();
+	});
+
+	$effect(() => {
+		if (!hasMounted) {
+			return;
+		}
+
+		persistPinnedProjects();
 	});
 
 	$effect(() => {
@@ -817,12 +833,7 @@
 		if (options.fullHistory) {
 			setThreadHistoryExpanded(threadId, true);
 		}
-		if (threads.some((thread) => thread.id === threadId)) {
-			const threadSummary = compactThreadSummary(result.thread);
-			threads = sortThreads(
-				threads.map((thread) => (thread.id === threadId ? { ...thread, ...threadSummary } : thread))
-			);
-		}
+		applyThreadSummaryUpdate(threadId, () => compactThreadSummary(result.thread));
 		if (options.includeUsage) {
 			threadUsageByThread = {
 				...threadUsageByThread,
@@ -924,6 +935,22 @@
 	async function handleProjectSelect(projectPath: string): Promise<void> {
 		collapseSidebarOnMobile();
 		await selectProject(projectPath);
+	}
+
+	function toggleProjectPinned(event: MouseEvent, projectPath: string): void {
+		event.preventDefault();
+		event.stopPropagation();
+
+		if (projectIsPinned(projectPath)) {
+			pinnedProjectPaths = removeRecordEntry(pinnedProjectPaths, projectPath);
+		} else {
+			pinnedProjectPaths = {
+				...pinnedProjectPaths,
+				[projectPath]: true
+			};
+		}
+
+		projects = sortProjects(projects);
 	}
 
 	async function toggleProjectExpanded(projectPath: string): Promise<void> {
@@ -1311,6 +1338,10 @@
 		if (notification.method === 'turn/started') {
 			const turnId = readTurnId(notification.params) ?? 'pending';
 			markThreadActiveTurn(threadId, turnId, activeTurnStartedAtByThread[threadId] ?? Date.now());
+			applyThreadSummaryUpdate(threadId, (thread) => ({
+				...thread,
+				status: 'in_progress'
+			}));
 			if (turnId !== 'pending') {
 				updateTurnStatus(threadId, turnId, readTurnStatus(notification.params) ?? 'inProgress');
 			}
@@ -1350,6 +1381,10 @@
 			const turnStatus = readTurnStatus(notification.params) ?? 'completed';
 			if (turnId) {
 				updateTurnStatus(threadId, turnId, turnStatus);
+				applyThreadSummaryUpdate(threadId, (thread) => ({
+					...thread,
+					status: turnStatus
+				}));
 				const startedAt = activeTurnStartedAtByThread[threadId] ?? null;
 				if (turnStatus === 'interrupted' && startedAt !== null) {
 					turnElapsedSeconds = {
@@ -1367,6 +1402,7 @@
 	async function finalizeTurn(threadId: string): Promise<void> {
 		const finalTurnId = activeTurnIdsByThread[threadId] ?? null;
 		const finalStartedAt = activeTurnStartedAtByThread[threadId] ?? null;
+		clearThreadActiveTurn(threadId);
 
 		try {
 			const tasks: Promise<void>[] = [refreshThreads()];
@@ -1391,7 +1427,6 @@
 					[finalTurnId]: elapsedSecondsFrom(finalStartedAt)
 				};
 			}
-			clearThreadActiveTurn(threadId);
 			releasePendingAttachmentPreviews(threadId);
 			pruneInactiveThreadEventSubscriptions();
 			void maybeGenerateThreadName(threadId);
@@ -1412,6 +1447,9 @@
 		if (latestTurn && isInProgressTurnStatus(latestTurn.status)) {
 			return true;
 		}
+		if (detailedThread && latestTurn) {
+			return false;
+		}
 
 		const normalizedStatus = normalizeTurnStatus(thread.status);
 		return (
@@ -1423,6 +1461,10 @@
 
 	function projectChatCount(projectPath: string): number {
 		return projects.find((project) => project.path === projectPath)?.threadCount ?? 0;
+	}
+
+	function projectIsPinned(projectPath: string): boolean {
+		return Boolean(pinnedProjectPaths[projectPath]);
 	}
 
 	function projectIsExpanded(projectPath: string): boolean {
@@ -1748,7 +1790,10 @@
 	}
 
 	function applyThreadNameLocally(threadId: string, name: string): void {
-		threads = threads.map((thread) => (thread.id === threadId ? { ...thread, name } : thread));
+		applyThreadSummaryUpdate(threadId, (thread) => ({
+			...thread,
+			name
+		}));
 
 		const detailedThread = threadDetails[threadId];
 		if (detailedThread) {
@@ -1912,6 +1957,12 @@
 
 	function sortProjects(list: ProjectSummary[]): ProjectSummary[] {
 		return [...list].sort((left, right) => {
+			const leftPinned = Boolean(pinnedProjectPaths[left.path]);
+			const rightPinned = Boolean(pinnedProjectPaths[right.path]);
+			if (leftPinned !== rightPinned) {
+				return leftPinned ? -1 : 1;
+			}
+
 			const byName = left.name.localeCompare(right.name, undefined, {
 				sensitivity: 'base'
 			});
@@ -1944,6 +1995,46 @@
 			...thread,
 			turns: []
 		};
+	}
+
+	function applyThreadSummaryUpdate(
+		threadId: string,
+		updater: (thread: CodexThread) => CodexThread
+	): void {
+		let foundInVisibleThreads = false;
+		const nextThreads = threads.map((thread) => {
+			if (thread.id !== threadId) {
+				return thread;
+			}
+
+			foundInVisibleThreads = true;
+			return updater(thread);
+		});
+		if (foundInVisibleThreads) {
+			threads = sortThreads(nextThreads);
+		}
+
+		let updatedCache = false;
+		const nextProjectThreadsByPath: Record<string, CodexThread[]> = {};
+		for (const [projectPath, projectThreadList] of Object.entries(projectThreadsByPath)) {
+			let foundInProject = false;
+			const nextProjectThreads = projectThreadList.map((thread) => {
+				if (thread.id !== threadId) {
+					return thread;
+				}
+
+				foundInProject = true;
+				return updater(thread);
+			});
+
+			nextProjectThreadsByPath[projectPath] = foundInProject
+				? sortThreads(nextProjectThreads)
+				: projectThreadList;
+			updatedCache ||= foundInProject;
+		}
+		if (updatedCache) {
+			projectThreadsByPath = nextProjectThreadsByPath;
+		}
 	}
 
 	function buildThreadReadPath(threadId: string, options: FetchThreadOptions = {}): string {
@@ -2129,6 +2220,36 @@
 		} catch {
 			// ignore malformed saved sidebar state
 		}
+	}
+
+	function restorePinnedProjects(): void {
+		try {
+			const raw = window.localStorage.getItem(PINNED_PROJECTS_KEY);
+			if (!raw) {
+				return;
+			}
+
+			const parsed = JSON.parse(raw);
+			if (!parsed || typeof parsed !== 'object') {
+				return;
+			}
+
+			const nextPinnedProjects: Record<string, true> = {};
+			for (const [projectPath, pinned] of Object.entries(parsed)) {
+				if (projectPath && pinned === true) {
+					nextPinnedProjects[projectPath] = true;
+				}
+			}
+
+			pinnedProjectPaths = nextPinnedProjects;
+			projects = sortProjects(projects);
+		} catch {
+			// ignore malformed saved pinned projects
+		}
+	}
+
+	function persistPinnedProjects(): void {
+		window.localStorage.setItem(PINNED_PROJECTS_KEY, JSON.stringify(pinnedProjectPaths));
 	}
 
 	function persistDesktopSidebarPreference(value: boolean): void {
@@ -2667,7 +2788,7 @@
 		return thread.turns.length - 1;
 	}
 
-	function updateTurnStatus(threadId: string, turnId: string, status: string): void {
+	function updateTurnStatus(threadId: string, turnId: string, turnStatus: string): void {
 		const thread = threadDetails[threadId];
 		if (!thread) {
 			return;
@@ -2689,13 +2810,14 @@
 		turns[turnIndex] = {
 			...turns[turnIndex],
 			id: turnId,
-			status
+			status: turnStatus
 		};
 
 		threadDetails = {
 			...threadDetails,
 			[threadId]: {
 				...thread,
+				status: turnStatus,
 				turns
 			}
 		};
@@ -2989,15 +3111,6 @@
 				<button
 					class={iconButtonClass}
 					type="button"
-					onclick={() => void handleCreateThread(selectedProjectPath)}
-					disabled={!selectedProjectPath || creatingThread}
-					aria-label="New chat"
-				>
-					<PlusIcon size={18} />
-				</button>
-				<button
-					class={iconButtonClass}
-					type="button"
 					onclick={closeSidebar}
 					aria-label="Hide sidebar"
 				>
@@ -3009,7 +3122,7 @@
 		<div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-[1.1rem]">
 			{#if banner}
 				<div
-					class="mx-[1.1rem] mt-4 border border-[rgba(255,124,96,0.24)] bg-[rgba(255,124,96,0.08)] p-[0.85rem] text-[0.82rem] text-notice"
+					class="mx-[1.1rem] mt-4 border border-notice-soft-line bg-notice-soft-fill p-[0.85rem] text-[0.82rem] text-notice"
 				>
 					{banner}
 				</div>
@@ -3042,9 +3155,38 @@
 								onclick={() => void handleProjectSelect(project.path)}
 							>
 								<span class="min-w-0 flex-1 truncate font-sans text-[0.85rem]">{project.name}</span>
-								<span class="font-mono text-[0.78rem] text-muted"
-									>{projectChatCount(project.path)}</span
-								>
+							</button>
+							<button
+								type="button"
+								class={projectPinButtonClass}
+								class:pointer-events-auto={projectIsPinned(project.path)}
+								class:opacity-100={projectIsPinned(project.path)}
+								class:border-line={projectIsPinned(project.path)}
+								class:bg-surface-1={projectIsPinned(project.path)}
+								class:text-accent={projectIsPinned(project.path)}
+								onclick={(event) => toggleProjectPinned(event, project.path)}
+								aria-label={projectIsPinned(project.path) ? 'Unpin project' : 'Pin project'}
+								title={projectIsPinned(project.path) ? 'Unpin project' : 'Pin project'}
+							>
+								<PushPinIcon
+									size={14}
+									weight={projectIsPinned(project.path) ? 'fill' : 'regular'}
+								/>
+							</button>
+							<button
+								type="button"
+								class={projectCreateButtonClass}
+								class:pointer-events-auto={project.path === selectedProjectPath}
+								class:opacity-100={project.path === selectedProjectPath}
+								class:border-line={project.path === selectedProjectPath}
+								class:bg-surface-1={project.path === selectedProjectPath}
+								class:text-fg={project.path === selectedProjectPath}
+								onclick={() => void handleCreateThread(project.path)}
+								disabled={creatingThread}
+								aria-label={`New chat in ${project.name}`}
+								title={`New chat in ${project.name}`}
+							>
+								<PlusIcon size={14} />
 							</button>
 						</div>
 
@@ -3058,52 +3200,50 @@
 									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
 										no chats yet
 									</div>
-									{:else}
-										{#each sidebarThreadsForProject(project.path) as thread (thread.id)}
-											<div
-												class={chatRowClass}
-												class:border-l-accent={thread.id === selectedThreadId}
-												class:bg-[color:var(--surface-2)]={thread.id === selectedThreadId}
-												class:text-accent={thread.id === selectedThreadId}
+								{:else}
+									{#each sidebarThreadsForProject(project.path) as thread (thread.id)}
+										<div
+											class={chatRowClass}
+											class:border-l-accent={thread.id === selectedThreadId}
+											class:bg-surface-2={thread.id === selectedThreadId}
+											class:text-accent={thread.id === selectedThreadId}
+										>
+											<button
+												type="button"
+												class={chatSelectButtonClass}
+												onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
+												aria-current={thread.id === selectedThreadId ? 'page' : undefined}
 											>
-												<button
-													type="button"
-													class={chatSelectButtonClass}
-													onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
-													aria-current={thread.id === selectedThreadId ? 'page' : undefined}
-												>
-													<span
-														class={`h-2.5 w-2.5 shrink-0 rounded-full border transition-[transform,background-color,border-color,opacity] duration-150 ${
-															thread.id === selectedThreadId
-																? 'border-accent bg-accent opacity-100'
-																: 'border-line bg-transparent opacity-55 group-hover:opacity-80'
-														}`}
-														aria-hidden="true"
-													></span>
-													<span class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem]">
-														<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
-														{#if threadIsRunning(thread)}
-															<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
-														{/if}
-													</span>
-												</button>
-												<button
-													type="button"
-													class={threadArchiveButtonClass}
-													disabled={Boolean(archivingThreadIds[thread.id]) || threadIsRunning(thread)}
-													onclick={(event) => void handleArchiveThread(event, project.path, thread)}
-													aria-label={`Archive ${chatLabel(thread)}`}
-													title={
-														threadIsRunning(thread)
-															? 'Active chats cannot be archived'
-															: 'Archive chat'
-													}
-												>
-													<ArchiveIcon size={14} />
-												</button>
-											</div>
-										{/each}
-									{/if}
+												<span
+													class={`h-2.5 w-2.5 shrink-0 rounded-full border transition-[transform,background-color,border-color,opacity] duration-150 ${
+														thread.id === selectedThreadId
+															? 'border-accent bg-accent opacity-100'
+															: 'border-line bg-transparent opacity-55 group-hover:opacity-80'
+													}`}
+													aria-hidden="true"
+												></span>
+												<span class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem]">
+													<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
+													{#if threadIsRunning(thread)}
+														<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
+													{/if}
+												</span>
+											</button>
+											<button
+												type="button"
+												class={threadArchiveButtonClass}
+												disabled={Boolean(archivingThreadIds[thread.id]) || threadIsRunning(thread)}
+												onclick={(event) => void handleArchiveThread(event, project.path, thread)}
+												aria-label={`Archive ${chatLabel(thread)}`}
+												title={threadIsRunning(thread)
+													? 'Active chats cannot be archived'
+													: 'Archive chat'}
+											>
+												<ArchiveIcon size={14} />
+											</button>
+										</div>
+									{/each}
+								{/if}
 							</div>
 						{/if}
 					</section>
@@ -3111,7 +3251,7 @@
 					<div
 						class="grid gap-[0.35rem] border-t border-line px-[1.1rem] py-4 font-mono text-[0.78rem] text-muted"
 					>
-						<strong>no projects yet</strong>
+						<span class="font-semibold text-fg">no projects yet</span>
 						<span>projects appear once they have codex chats</span>
 					</div>
 				{/each}
@@ -3251,7 +3391,7 @@
 
 		<footer class="relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4">
 			<div
-				class="pointer-events-none absolute inset-x-0 top-0 h-20 bg-[linear-gradient(180deg,rgba(9,10,12,0),rgba(9,10,12,0.56)_42%,rgba(9,10,12,0.92)_100%)] backdrop-blur-[10px]"
+				class="theme-bg-footer-fade pointer-events-none absolute inset-x-0 top-0 h-20 backdrop-blur-[10px]"
 			></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
 				{#if activeFooterRequests.length > 0}

@@ -2,8 +2,11 @@
 	import { onMount, tick } from 'svelte';
 	import {
 		ArrowUpIcon,
+		BrainIcon,
 		GearSixIcon,
+		ListChecksIcon,
 		PaperclipIcon,
+		ShieldCheckIcon,
 		SpinnerGapIcon,
 		StopIcon,
 		XIcon
@@ -69,6 +72,7 @@
 	let fileInputRef = $state<HTMLInputElement | null>(null);
 	let isSubmitting = $state(false);
 	let advancedOpen = $state(false);
+	let desktopAdvancedOpen = $state(false);
 	let selectionStart = $state(0);
 	let selectionEnd = $state(0);
 	let mentionSearchResults = $state<FuzzyFileSearchResult[]>([]);
@@ -135,10 +139,12 @@
 	const supportedImageAccept = [...supportedImageTypes].join(',');
 	const controlTriggerClass = 'min-[821px]:text-[12px]';
 	const inlineSelectClass = 'w-full min-w-0';
-	const desktopModelClass = 'min-[821px]:max-w-[9.4rem]';
-	const desktopEffortClass = 'min-[821px]:w-[6.25rem]';
-	const desktopModeClass = 'min-[821px]:w-[5.75rem]';
-	const desktopPermissionClass = 'min-[821px]:w-[6rem]';
+	const settingsSectionLabelClass =
+		'flex items-center gap-2 px-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted';
+	const desktopModelClass =
+		'min-[821px]:max-w-[9.4rem] min-[821px]:!border-0 min-[821px]:!bg-transparent min-[821px]:!pl-1.5 min-[821px]:!pr-1 min-[821px]:focus-visible:text-accent';
+	const desktopGhostButtonClass =
+		'inline-flex h-9 w-9 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent focus-visible:text-accent disabled:cursor-not-allowed disabled:opacity-40';
 	const activeMentionQuery = $derived.by<MentionQueryMatch | null>(() =>
 		projectPath && !editorDisabled ? readActiveMentionQuery(value, selectionStart, selectionEnd) : null
 	);
@@ -314,7 +320,7 @@
 		token.dataset.mentionToken = mention.token;
 		token.contentEditable = 'false';
 		token.className =
-			'mr-1 inline-flex max-w-full items-center gap-1 border border-line bg-surface-0 px-2 py-[0.12rem] align-baseline font-mono text-[0.8rem] leading-none text-fg shadow-[inset_0_0_0_1px_rgba(255,255,255,0.02)]';
+			'mr-1 inline-flex max-w-full items-center gap-1 border border-line bg-surface-0 px-2 py-[0.12rem] align-baseline font-mono text-[0.8rem] leading-none text-fg theme-shadow-inset-subtle';
 
 		const label = document.createElement('span');
 		label.className = 'truncate';
@@ -955,7 +961,7 @@
 	{#if mentionSearchVisible}
 		<div class="-mt-2 px-3 pb-3">
 			<div
-				class="overflow-hidden border border-line bg-surface-0 shadow-[0_18px_48px_rgba(0,0,0,0.24)]"
+				class="theme-shadow-elevated-soft overflow-hidden border border-line bg-surface-0"
 			>
 				{#if activeMentionQuery?.query.length === 0}
 					<div class="px-3 py-2.5 text-[12px] text-muted">Type after `@` to search project files</div>
@@ -1000,7 +1006,7 @@
 						/>
 
 						<div
-							class="absolute inset-x-0 bottom-0 bg-[linear-gradient(180deg,rgba(9,10,12,0)_0%,rgba(9,10,12,0.88)_100%)] px-2 py-1.5"
+							class="theme-bg-attachment-caption absolute inset-x-0 bottom-0 px-2 py-1.5"
 						>
 							<p class="truncate text-[10px] font-medium text-fg">{attachment.file.name}</p>
 							<p class="text-[10px] text-muted">{formatAttachmentSize(attachment.file.size)}</p>
@@ -1037,31 +1043,49 @@
 					<Popover.Content
 						sideOffset={10}
 						align="start"
-						class="z-50 grid w-[min(18rem,calc(100vw-1rem))] gap-2 border border-line bg-surface-1 p-2 shadow-[0_18px_48px_rgba(0,0,0,0.42)] outline-none min-[821px]:hidden"
+						class="theme-shadow-elevated-strong z-50 grid w-[min(18rem,calc(100vw-1rem))] gap-2 border border-line bg-surface-1 p-2 outline-none min-[821px]:hidden"
 					>
-						<AppSelect
-							bind:value={selectedEffort}
-							items={effortSelectOptions}
-							placeholder="effort"
-							triggerClass={inlineSelectClass}
-							ariaLabel="Reasoning effort"
-						/>
+						<div class="grid gap-1.5">
+							<div class={settingsSectionLabelClass}>
+								<BrainIcon size={12} />
+								<span>Thinking Mode</span>
+							</div>
+							<AppSelect
+								bind:value={selectedEffort}
+								items={effortSelectOptions}
+								placeholder="effort"
+								triggerClass={inlineSelectClass}
+								ariaLabel="Reasoning effort"
+							/>
+						</div>
 
-						<AppSelect
-							bind:value={selectedMode}
-							items={modeOptions}
-							placeholder="mode"
-							triggerClass={inlineSelectClass}
-							ariaLabel="Prompt mode"
-						/>
+						<div class="grid gap-1.5">
+							<div class={settingsSectionLabelClass}>
+								<ListChecksIcon size={12} />
+								<span>Build / Plan</span>
+							</div>
+							<AppSelect
+								bind:value={selectedMode}
+								items={modeOptions}
+								placeholder="mode"
+								triggerClass={inlineSelectClass}
+								ariaLabel="Prompt mode"
+							/>
+						</div>
 
-						<AppSelect
-							bind:value={selectedPermissionPreset}
-							items={permissionOptions}
-							placeholder="permissions"
-							triggerClass={inlineSelectClass}
-							ariaLabel="Permission preset"
-						/>
+						<div class="grid gap-1.5">
+							<div class={settingsSectionLabelClass}>
+								<ShieldCheckIcon size={12} />
+								<span>Permissions</span>
+							</div>
+							<AppSelect
+								bind:value={selectedPermissionPreset}
+								items={permissionOptions}
+								placeholder="permissions"
+								triggerClass={inlineSelectClass}
+								ariaLabel="Permission preset"
+							/>
+						</div>
 					</Popover.Content>
 				</Popover.Portal>
 			</Popover.Root>
@@ -1113,16 +1137,6 @@
 			class="hidden min-[821px]:grid min-[821px]:grid-cols-[minmax(0,1fr)_auto] min-[821px]:items-end min-[821px]:gap-2"
 		>
 			<div class="flex min-w-0 flex-wrap items-center gap-2">
-				<button
-					type="button"
-					class="inline-flex h-9 w-9 items-center justify-center border border-line bg-surface-0 text-muted transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
-					onclick={openFilePicker}
-					aria-label="Attach images"
-					disabled={attachmentDisabled}
-				>
-					<PaperclipIcon size={16} />
-				</button>
-
 				<AppSelect
 					bind:value={selectedModel}
 					items={modelOptions}
@@ -1131,29 +1145,74 @@
 					ariaLabel="Model"
 				/>
 
-				<AppSelect
-					bind:value={selectedEffort}
-					items={effortSelectOptions}
-					placeholder="effort"
-					triggerClass={`${controlTriggerClass} ${desktopEffortClass}`}
-					ariaLabel="Reasoning effort"
-				/>
+				<Popover.Root bind:open={desktopAdvancedOpen}>
+					<Popover.Trigger
+						class={desktopGhostButtonClass}
+						aria-label="Advanced options"
+					>
+						<GearSixIcon size={16} />
+					</Popover.Trigger>
 
-				<AppSelect
-					bind:value={selectedMode}
-					items={modeOptions}
-					placeholder="mode"
-					triggerClass={`${controlTriggerClass} ${desktopModeClass}`}
-					ariaLabel="Prompt mode"
-				/>
+					<Popover.Portal>
+						<Popover.Content
+							sideOffset={10}
+							align="start"
+							class="theme-shadow-elevated-strong z-50 grid w-[18rem] gap-2 border border-line bg-surface-1 p-2 outline-none"
+						>
+							<div class="grid gap-1.5">
+								<div class={settingsSectionLabelClass}>
+									<BrainIcon size={12} />
+									<span>Thinking Mode</span>
+								</div>
+								<AppSelect
+									bind:value={selectedEffort}
+									items={effortSelectOptions}
+									placeholder="effort"
+									triggerClass={inlineSelectClass}
+									ariaLabel="Reasoning effort"
+								/>
+							</div>
 
-				<AppSelect
-					bind:value={selectedPermissionPreset}
-					items={permissionOptions}
-					placeholder="permissions"
-					triggerClass={`${controlTriggerClass} ${desktopPermissionClass}`}
-					ariaLabel="Permission preset"
-				/>
+							<div class="grid gap-1.5">
+								<div class={settingsSectionLabelClass}>
+									<ListChecksIcon size={12} />
+									<span>Build / Plan</span>
+								</div>
+								<AppSelect
+									bind:value={selectedMode}
+									items={modeOptions}
+									placeholder="mode"
+									triggerClass={inlineSelectClass}
+									ariaLabel="Prompt mode"
+								/>
+							</div>
+
+							<div class="grid gap-1.5">
+								<div class={settingsSectionLabelClass}>
+									<ShieldCheckIcon size={12} />
+									<span>Permissions</span>
+								</div>
+								<AppSelect
+									bind:value={selectedPermissionPreset}
+									items={permissionOptions}
+									placeholder="permissions"
+									triggerClass={inlineSelectClass}
+									ariaLabel="Permission preset"
+								/>
+							</div>
+						</Popover.Content>
+					</Popover.Portal>
+				</Popover.Root>
+
+				<button
+					type="button"
+					class={desktopGhostButtonClass}
+					onclick={openFilePicker}
+					aria-label="Attach images"
+					disabled={attachmentDisabled}
+				>
+					<PaperclipIcon size={16} />
+				</button>
 			</div>
 
 			<button

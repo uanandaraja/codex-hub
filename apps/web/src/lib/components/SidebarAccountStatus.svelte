@@ -136,10 +136,10 @@
 </script>
 
 <section class="border-t border-line px-[1.1rem] py-[1.05rem]">
-	<div class="border border-line bg-[linear-gradient(180deg,rgba(138,180,255,0.08),rgba(15,17,21,0.96))]">
+	<div class="border border-line bg-surface-0">
 		<button
 			type="button"
-			class="w-full text-left transition-[border-color,background-color] duration-150 hover:bg-[rgba(138,180,255,0.05)]"
+			class="w-full text-left transition-[border-color,background-color] duration-150 hover:bg-accent-soft-hover"
 			aria-expanded={expanded}
 			aria-controls="sidebar-account-limits"
 			onclick={() => {

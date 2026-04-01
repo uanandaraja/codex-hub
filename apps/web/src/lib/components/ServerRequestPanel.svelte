@@ -31,7 +31,7 @@
 
 	const panelClass = $derived.by(() =>
 		inline
-			? 'border border-line bg-[rgba(15,17,21,0.8)] p-[0.95rem] text-[13px] text-fg'
+			? 'border border-line bg-overlay-panel p-[0.95rem] text-[13px] text-fg'
 			: 'border border-line bg-surface-1 p-[0.95rem] text-[13px] text-fg'
 	);
 	const actionButtonClass =

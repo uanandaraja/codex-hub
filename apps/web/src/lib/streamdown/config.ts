@@ -27,33 +27,33 @@ export const streamdownTheme = {
 		base: 'my-4 border-l-2 border-line pl-4 text-[14px] leading-[1.7] text-muted'
 	},
 	link: {
-		base: 'text-accent underline underline-offset-2',
+		base: 'font-semibold text-accent underline underline-offset-2 transition-colors duration-150 hover:text-fg',
 		blocked: 'text-muted no-underline'
 	},
 	codespan: {
-		base: 'border border-line bg-[#0b0d11] px-[0.35rem] py-[0.15rem] font-mono text-[14px] text-fg'
+		base: 'border border-line bg-surface-code px-[0.35rem] py-[0.15rem] font-mono text-[14px] text-fg'
 	},
 	code: {
-		base: 'my-4 w-full overflow-hidden border border-line bg-[#0b0d11]',
-		container: 'relative overflow-hidden bg-[#0b0d11] font-mono text-[14px] text-fg',
+		base: 'my-4 w-full overflow-hidden border border-line bg-surface-code',
+		container: 'relative overflow-hidden bg-surface-code font-mono text-[14px] text-fg',
 		header: 'hidden',
 		buttons: 'hidden',
 		language: 'hidden',
-		skeleton: 'block whitespace-pre bg-[#151922] text-transparent animate-pulse',
-		pre: 'm-0 max-w-full overflow-x-auto bg-[#0b0d11] px-[1rem] py-[1rem]',
+		skeleton: 'block whitespace-pre bg-surface-code-muted text-transparent animate-pulse',
+		pre: 'm-0 max-w-full overflow-x-auto bg-surface-code px-[1rem] py-[1rem]',
 		line: 'block min-w-full'
 	},
 	table: {
 		base: 'my-4 max-w-full overflow-x-auto border border-line'
 	},
 	thead: {
-		base: 'bg-[#10131a]'
+		base: 'bg-surface-code-muted'
 	},
 	tbody: {
 		base: 'bg-surface-1'
 	},
 	tfoot: {
-		base: 'bg-[#10131a]'
+		base: 'bg-surface-code-muted'
 	},
 	tr: {
 		base: 'border-b border-line last:border-b-0'
@@ -81,12 +81,12 @@ export const streamdownTheme = {
 		image: 'max-w-full border border-line'
 	},
 	mermaid: {
-		base: 'my-4 border border-line bg-[#0b0d11] p-4',
+		base: 'my-4 border border-line bg-surface-code p-4',
 		buttons: 'hidden',
 		icon: 'text-muted'
 	},
 	math: {
-		block: 'my-4 overflow-x-auto border border-line bg-[#0b0d11] px-[0.9rem] py-[0.9rem]',
+		block: 'my-4 overflow-x-auto border border-line bg-surface-code px-[0.9rem] py-[0.9rem]',
 		inline: 'px-[0.2rem] text-fg'
 	}
 } as const;

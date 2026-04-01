@@ -55,7 +55,7 @@
 	<Select.Portal>
 		<Select.Content
 			sideOffset={8}
-			class={`z-50 min-w-[var(--bits-select-anchor-width)] border border-line bg-surface-1 p-1 shadow-[0_18px_48px_rgba(0,0,0,0.42)] outline-none data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1 ${contentClass}`}
+			class={`theme-shadow-elevated-strong z-50 min-w-[var(--bits-select-anchor-width)] border border-line bg-surface-1 p-1 outline-none data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[side=bottom]:translate-y-1 data-[side=top]:-translate-y-1 ${contentClass}`}
 		>
 			<Select.ScrollUpButton class="flex h-6 items-center justify-center text-muted">
 				<CaretUpIcon size={12} />

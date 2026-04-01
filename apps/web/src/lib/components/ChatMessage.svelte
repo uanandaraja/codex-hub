@@ -1,7 +1,12 @@
 <script lang="ts">
+	import gruvboxDarkMedium from '@shikijs/themes/gruvbox-dark-medium';
 	import { Streamdown } from 'svelte-streamdown';
 	import { streamdownTheme } from '$lib/streamdown/config';
 	import TurnStatusNote from '$lib/components/TurnStatusNote.svelte';
+
+	const streamdownShikiThemes = {
+		'gruvbox-dark-medium': gruvboxDarkMedium
+	} as const;
 
 	let {
 		role,
@@ -27,7 +32,7 @@
 </script>
 
 {#if isUser}
-	<article class="mb-4 w-full border border-line bg-[rgba(137,180,250,0.08)] px-[1.1rem] py-4">
+	<article class="mb-4 w-full border border-line bg-surface-1 px-[1.1rem] py-4">
 		{#if imageAttachments.length > 0}
 			<div class={`flex flex-wrap gap-2 ${content ? 'mb-3' : ''}`}>
 				{#each imageAttachments as attachment (attachment.src)}
@@ -55,6 +60,8 @@
 					parseIncompleteMarkdown={streaming}
 					controls={{ code: false, mermaid: false, table: false }}
 					theme={streamdownTheme}
+					shikiTheme="gruvbox-dark-medium"
+					shikiThemes={streamdownShikiThemes}
 					class="min-w-0"
 				/>
 			</div>
