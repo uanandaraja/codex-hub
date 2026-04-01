@@ -16,6 +16,7 @@
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
 	import SidebarAccountStatus from '$lib/components/SidebarAccountStatus.svelte';
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
+	import { formatModelDisplayName } from '$lib/model-display-name';
 	import type {
 		PromptAttachmentDraft,
 		PromptFileMentionDraft,
@@ -1982,7 +1983,7 @@
 				return left.isDefault ? -1 : 1;
 			}
 
-			return left.displayName.localeCompare(right.displayName);
+			return formatModelDisplayName(left.model).localeCompare(formatModelDisplayName(right.model));
 		});
 	}
 

@@ -8,11 +8,12 @@
 		PaperclipIcon,
 		ShieldCheckIcon,
 		SpinnerGapIcon,
-		StopIcon,
+		StopCircleIcon,
 		XIcon
 	} from 'phosphor-svelte';
 	import { Popover } from 'bits-ui';
 	import type { FuzzyFileSearchResponse, FuzzyFileSearchResult, ModelSummary } from '$lib/types';
+	import { formatModelDisplayName } from '$lib/model-display-name';
 	import AppSelect, { type AppSelectOption } from '$lib/components/ui/AppSelect.svelte';
 	import type {
 		PromptAttachmentDraft,
@@ -109,7 +110,7 @@
 		models.length > 0
 			? models.map((model) => ({
 					value: model.model,
-					label: model.displayName
+					label: formatModelDisplayName(model.model)
 				}))
 			: [{ value: '', label: 'default' }]
 	);
@@ -1123,7 +1124,7 @@
 					{#if isInterrupting}
 						<SpinnerGapIcon size={16} class="animate-spin" />
 					{:else}
-						<StopIcon size={16} />
+						<StopCircleIcon size={16} />
 					{/if}
 				{:else if isSending}
 					<SpinnerGapIcon size={16} class="animate-spin" />
@@ -1230,7 +1231,7 @@
 					{#if isInterrupting}
 						<SpinnerGapIcon size={16} class="animate-spin" />
 					{:else}
-						<StopIcon size={16} />
+						<StopCircleIcon size={16} />
 					{/if}
 				{:else if isSending}
 					<SpinnerGapIcon size={16} class="animate-spin" />
