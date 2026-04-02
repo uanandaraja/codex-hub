@@ -82,12 +82,14 @@
 	let mentionSearchResults = $state<FuzzyFileSearchResult[]>([]);
 	let mentionSearchLoading = $state(false);
 	let mentionSearchIndex = $state(0);
-	let mentionSearchError = $state<string | null>(null);
-	let dismissedMentionQueryKey = $state<string | null>(null);
-	let mentionSearchRequestId = 0;
-	let mentionSearchDebounce: ReturnType<typeof setTimeout> | null = null;
-	let mentionSearchAbortController: AbortController | null = null;
-	let lastComposerSignature = '';
+		let mentionSearchError = $state<string | null>(null);
+		let dismissedMentionQueryKey = $state<string | null>(null);
+		let mentionSearchRequestId = 0;
+		let mentionSearchDebounce: ReturnType<typeof setTimeout> | null = null;
+		let mentionSearchAbortController: AbortController | null = null;
+		let lastComposerSignature = '';
+		let dragDepth = $state(0);
+		let attachmentPreviewId = $state<string | null>(null);
 
 	const isSending = $derived(isSubmitting);
 	const attachmentDisabled = $derived(disabled || isStreaming || isSubmitting || isInterrupting);
@@ -150,11 +152,15 @@
 		'min-[821px]:max-w-[9.4rem] min-[821px]:!border-0 min-[821px]:!bg-transparent min-[821px]:!pl-1.5 min-[821px]:!pr-1 min-[821px]:focus-visible:text-accent';
 	const ghostButtonClass =
 		'inline-flex h-9 w-9 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent focus-visible:text-accent disabled:cursor-not-allowed disabled:opacity-40';
-	const branchLabelClass =
-		'inline-flex max-w-full items-center gap-1.5 overflow-hidden font-mono text-[11px] text-muted min-[821px]:max-w-[16rem]';
-	const activeMentionQuery = $derived.by<MentionQueryMatch | null>(() =>
-		projectPath && !editorDisabled ? readActiveMentionQuery(value, selectionStart, selectionEnd) : null
-	);
+		const branchLabelClass =
+			'inline-flex max-w-full items-center gap-1.5 overflow-hidden font-mono text-[11px] text-muted min-[821px]:max-w-[16rem]';
+		const attachmentDragActive = $derived(dragDepth > 0);
+		const activeAttachmentPreview = $derived.by(
+			() => attachments.find((attachment) => attachment.id === attachmentPreviewId) ?? null
+		);
+		const activeMentionQuery = $derived.by<MentionQueryMatch | null>(() =>
+			projectPath && !editorDisabled ? readActiveMentionQuery(value, selectionStart, selectionEnd) : null
+		);
 	const activeMentionQueryKey = $derived.by(() =>
 		activeMentionQuery ? `${activeMentionQuery.start}:${activeMentionQuery.end}:${activeMentionQuery.query}` : null
 	);
@@ -621,12 +627,13 @@
 		};
 		isSubmitting = true;
 
-		try {
-			await onsubmit?.(submitPayload);
-			value = '';
-			attachments = [];
-			mentions = [];
-			advancedOpen = false;
+			try {
+				await onsubmit?.(submitPayload);
+				value = '';
+				attachments = [];
+				attachmentPreviewId = null;
+				mentions = [];
+				advancedOpen = false;
 			resetMentionSearch();
 			lastComposerSignature = buildComposerSignature(value, mentions);
 			renderComposerDom(value, mentions);
@@ -747,45 +754,108 @@
 		syncBindingsFromEditor();
 	}
 
-	function openFilePicker(): void {
-		fileInputRef?.click();
-	}
+		function openFilePicker(): void {
+			fileInputRef?.click();
+		}
 
-	function handleFileInputChange(event: Event): void {
-		const input = event.currentTarget as HTMLInputElement | null;
-		const files = Array.from(input?.files ?? []).filter((file) =>
-			supportedImageTypes.has(file.type)
-		);
-		if (files.length === 0) {
+		function handleFileInputChange(event: Event): void {
+			const input = event.currentTarget as HTMLInputElement | null;
+			const files = filterSupportedImageFiles(input?.files ?? []);
+			if (files.length === 0) {
+				if (input) {
+					input.value = '';
+				}
+				return;
+			}
+
+			appendAttachmentFiles(files);
+
 			if (input) {
 				input.value = '';
 			}
-			return;
 		}
 
-		attachments = [
-			...attachments,
-			...files.map((file) => ({
-				id: crypto.randomUUID(),
-				file,
-				previewUrl: URL.createObjectURL(file)
-			}))
-		];
+		function handleComposerDragEnter(event: DragEvent): void {
+			if (attachmentDisabled || !hasFilePayload(event)) {
+				return;
+			}
 
-		if (input) {
-			input.value = '';
-		}
-	}
-
-	function removeAttachment(attachmentId: string): void {
-		const target = attachments.find((attachment) => attachment.id === attachmentId);
-		if (!target) {
-			return;
+			event.preventDefault();
+			if (hasSupportedImagePayload(event)) {
+				dragDepth += 1;
+			}
 		}
 
-		URL.revokeObjectURL(target.previewUrl);
-		attachments = attachments.filter((attachment) => attachment.id !== attachmentId);
-	}
+		function handleComposerDragOver(event: DragEvent): void {
+			if (attachmentDisabled || !hasFilePayload(event)) {
+				return;
+			}
+
+			event.preventDefault();
+			if (event.dataTransfer) {
+				event.dataTransfer.dropEffect = 'copy';
+			}
+		}
+
+		function handleComposerDragLeave(event: DragEvent): void {
+			if (attachmentDisabled || dragDepth === 0) {
+				return;
+			}
+
+			event.preventDefault();
+			dragDepth = Math.max(0, dragDepth - 1);
+		}
+
+		function handleComposerDrop(event: DragEvent): void {
+			const droppedFiles = Array.from(event.dataTransfer?.files ?? []);
+			dragDepth = 0;
+			if (attachmentDisabled || droppedFiles.length === 0) {
+				return;
+			}
+
+			event.preventDefault();
+			const files = filterSupportedImageFiles(droppedFiles);
+			if (files.length === 0) {
+				return;
+			}
+
+			appendAttachmentFiles(files);
+			editorRef?.focus();
+		}
+
+		function removeAttachment(attachmentId: string): void {
+			const target = attachments.find((attachment) => attachment.id === attachmentId);
+			if (!target) {
+				return;
+			}
+
+			URL.revokeObjectURL(target.previewUrl);
+			if (attachmentPreviewId === attachmentId) {
+				attachmentPreviewId = null;
+			}
+			attachments = attachments.filter((attachment) => attachment.id !== attachmentId);
+		}
+
+		function openAttachmentPreview(attachmentId: string): void {
+			attachmentPreviewId = attachmentId;
+		}
+
+		function closeAttachmentPreview(): void {
+			attachmentPreviewId = null;
+		}
+
+		function handleAttachmentPreviewBackdropClick(event: MouseEvent): void {
+			if (event.target === event.currentTarget) {
+				closeAttachmentPreview();
+			}
+		}
+
+		function handleAttachmentPreviewKeydown(event: KeyboardEvent): void {
+			if (event.key === 'Escape') {
+				event.preventDefault();
+				closeAttachmentPreview();
+			}
+		}
 
 	async function insertMention(result: FuzzyFileSearchResult): Promise<void> {
 		const queryMatch = activeMentionQuery;
@@ -831,7 +901,7 @@
 		await tick();
 	}
 
-	function formatAttachmentSize(byteLength: number): string {
+		function formatAttachmentSize(byteLength: number): string {
 		if (byteLength >= 1_000_000) {
 			return `${(byteLength / 1_000_000).toFixed(1)} MB`;
 		}
@@ -907,11 +977,48 @@
 		return mentionByPath;
 	}
 
-	function dedupeMentionDraftList(
-		mentionDrafts: PromptFileMentionDraft[]
-	): PromptFileMentionDraft[] {
-		return [...dedupeMentions(mentionDrafts).values()];
-	}
+		function dedupeMentionDraftList(
+			mentionDrafts: PromptFileMentionDraft[]
+		): PromptFileMentionDraft[] {
+			return [...dedupeMentions(mentionDrafts).values()];
+		}
+
+		function filterSupportedImageFiles(files: Iterable<File>): File[] {
+			return Array.from(files).filter((file) => supportedImageTypes.has(file.type));
+		}
+
+		function appendAttachmentFiles(files: File[]): void {
+			if (files.length === 0) {
+				return;
+			}
+
+			attachments = [
+				...attachments,
+				...files.map((file) => ({
+					id: crypto.randomUUID(),
+					file,
+					previewUrl: URL.createObjectURL(file)
+				}))
+			];
+		}
+
+		function hasFilePayload(event: DragEvent): boolean {
+			const items = Array.from(event.dataTransfer?.items ?? []);
+			if (items.length > 0) {
+				return items.some((item) => item.kind === 'file');
+			}
+
+			return (event.dataTransfer?.files.length ?? 0) > 0;
+		}
+
+		function hasSupportedImagePayload(event: DragEvent): boolean {
+			const items = Array.from(event.dataTransfer?.items ?? []);
+			if (items.length > 0) {
+				return items.some((item) => item.kind === 'file' && supportedImageTypes.has(item.type));
+			}
+
+			return filterSupportedImageFiles(event.dataTransfer?.files ?? []).length > 0;
+		}
 
 	function sameMentions(
 		left: PromptFileMentionDraft[],
@@ -928,13 +1035,21 @@
 	}
 </script>
 
-<div class="grid w-full gap-2">
-	<div
-		class="relative w-full overflow-hidden border border-line bg-surface-1 transition-[background-color] duration-150 focus-within:bg-surface-1"
-		class:opacity-50={disabled && !isStreaming}
-	>
-		<input
-			bind:this={fileInputRef}
+	<div class="grid w-full gap-2">
+		<div
+			class="relative w-full overflow-hidden border border-line bg-surface-1 transition-[background-color,border-color] duration-150 focus-within:bg-surface-1"
+			class:opacity-50={disabled && !isStreaming}
+			class:border-accent={attachmentDragActive}
+			class:bg-surface-2={attachmentDragActive}
+			role="group"
+			aria-label="Prompt composer"
+			ondragenter={handleComposerDragEnter}
+			ondragover={handleComposerDragOver}
+			ondragleave={handleComposerDragLeave}
+			ondrop={handleComposerDrop}
+		>
+			<input
+				bind:this={fileInputRef}
 			type="file"
 			accept={supportedImageAccept}
 			multiple
@@ -942,12 +1057,44 @@
 			onchange={handleFileInputChange}
 			class="sr-only"
 			tabindex="-1"
-			aria-hidden="true"
-		/>
+				aria-hidden="true"
+			/>
 
-		<div class="px-4 pt-4">
-			<div
-				bind:this={editorRef}
+			{#if attachments.length > 0}
+				<div class="flex flex-wrap gap-2 px-4 pt-4">
+					{#each attachments as attachment (attachment.id)}
+						<div class="inline-flex min-w-0 max-w-full items-center border border-line bg-surface-1/92 pr-1.5 theme-shadow-inset-subtle">
+							<button
+								type="button"
+								class="flex min-w-0 max-w-full items-center gap-2 px-2.5 py-2 text-left transition-colors duration-150 hover:text-accent"
+								onclick={() => openAttachmentPreview(attachment.id)}
+								aria-label={`Preview ${attachment.file.name}`}
+							>
+								<img
+									src={attachment.previewUrl}
+									alt={attachment.file.name}
+									class="h-7 w-7 shrink-0 border border-line object-cover"
+								/>
+								<span class="truncate text-[13px] text-fg">{attachment.file.name}</span>
+							</button>
+
+							<button
+								type="button"
+								aria-label={`Remove ${attachment.file.name}`}
+								onclick={() => removeAttachment(attachment.id)}
+								disabled={attachmentDisabled}
+								class="inline-flex h-7 w-7 shrink-0 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+							>
+								<XIcon size={14} />
+							</button>
+						</div>
+					{/each}
+				</div>
+			{/if}
+
+			<div class="px-4 pt-3">
+				<div
+					bind:this={editorRef}
 				contenteditable={editorDisabled ? 'false' : 'true'}
 				tabindex={editorDisabled ? -1 : 0}
 				role="textbox"
@@ -962,9 +1109,9 @@
 				onpaste={handleEditorPaste}
 				onbeforeinput={handleBeforeInput}
 				onkeydown={handleKeydown}
-				class="composer-editor min-h-[104px] max-h-56 overflow-y-auto whitespace-pre-wrap break-words bg-transparent pb-3 text-[16px] leading-relaxed text-fg outline-none min-[821px]:min-h-[92px] min-[821px]:text-[14px]"
-			></div>
-		</div>
+					class="composer-editor min-h-[104px] max-h-56 overflow-y-auto whitespace-pre-wrap break-words bg-transparent pb-3 text-[16px] leading-relaxed text-fg outline-none min-[821px]:min-h-[92px] min-[821px]:text-[14px]"
+				></div>
+			</div>
 
 		{#if mentionSearchVisible}
 			<div class="-mt-2 px-3 pb-3">
@@ -1002,40 +1149,7 @@
 			</div>
 		{/if}
 
-		{#if attachments.length > 0}
-			<div class="grid gap-2 px-3 pb-3">
-				<div class="flex flex-wrap gap-2">
-					{#each attachments as attachment (attachment.id)}
-						<div class="group relative h-24 w-24 overflow-hidden border border-line bg-surface-0">
-							<img
-								src={attachment.previewUrl}
-								alt={attachment.file.name}
-								class="h-full w-full object-cover"
-							/>
-
-							<div
-								class="theme-bg-attachment-caption absolute inset-x-0 bottom-0 px-2 py-1.5"
-							>
-								<p class="truncate text-[10px] font-medium text-fg">{attachment.file.name}</p>
-								<p class="text-[10px] text-muted">{formatAttachmentSize(attachment.file.size)}</p>
-							</div>
-
-							<button
-								type="button"
-								aria-label={`Remove ${attachment.file.name}`}
-								onclick={() => removeAttachment(attachment.id)}
-								disabled={attachmentDisabled}
-								class="absolute top-1 right-1 inline-flex h-6 w-6 items-center justify-center border border-line bg-surface-1/92 text-muted transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent"
-							>
-								<XIcon size={12} />
-							</button>
-						</div>
-					{/each}
-				</div>
-			</div>
-		{/if}
-
-		<div class="-mt-px flex justify-end px-2 py-1.5">
+			<div class="-mt-px flex justify-end px-2 py-1.5">
 			<button
 				type="button"
 				aria-label={isStreaming
@@ -1060,6 +1174,48 @@
 				{/if}
 			</button>
 		</div>
+
+		{#if activeAttachmentPreview}
+			<div
+				class="fixed inset-0 z-[70] bg-black/72 p-4 backdrop-blur-sm"
+				role="dialog"
+				aria-modal="true"
+				aria-label={`Preview ${activeAttachmentPreview.file.name}`}
+				tabindex="-1"
+				onclick={handleAttachmentPreviewBackdropClick}
+				onkeydown={handleAttachmentPreviewKeydown}
+			>
+				<div class="flex h-full w-full items-center justify-center">
+					<div
+						class="theme-shadow-elevated-strong flex max-h-full w-full max-w-5xl flex-col overflow-hidden border border-line bg-surface-1"
+					>
+						<div class="flex items-center justify-between gap-3 border-b border-line px-3 py-2">
+							<div class="min-w-0">
+								<p class="truncate text-[13px] text-fg">{activeAttachmentPreview.file.name}</p>
+								<p class="text-[11px] text-muted">
+									{formatAttachmentSize(activeAttachmentPreview.file.size)}
+								</p>
+							</div>
+							<button
+								type="button"
+								class="inline-flex h-8 w-8 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent"
+								onclick={closeAttachmentPreview}
+								aria-label="Close preview"
+							>
+								<XIcon size={16} />
+							</button>
+						</div>
+						<div class="flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+							<img
+								src={activeAttachmentPreview.previewUrl}
+								alt={activeAttachmentPreview.file.name}
+								class="max-h-[calc(100vh-9rem)] max-w-full object-contain"
+							/>
+						</div>
+					</div>
+				</div>
+			</div>
+		{/if}
 	</div>
 
 		<div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2 min-[821px]:hidden">

@@ -3708,18 +3708,19 @@
 				class="theme-bg-footer-fade pointer-events-none absolute inset-x-0 top-0 h-20 backdrop-blur-[10px]"
 			></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
-				{#if showScrollToBottom}
-					<div class="pointer-events-none absolute right-3 bottom-full mb-3">
-						<button
-							type="button"
-							class="pointer-events-auto inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-1/88 text-fg backdrop-blur-sm transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent"
-							onclick={() => void scrollConversationToBottom('smooth')}
-							aria-label="Scroll to bottom"
-						>
-							<CaretDownIcon size={18} />
-						</button>
-					</div>
-				{/if}
+					{#if showScrollToBottom}
+						<div class="pointer-events-none absolute inset-x-0 bottom-full mb-3 flex justify-center">
+							<button
+								type="button"
+								class="pointer-events-auto inline-flex items-center gap-1.5 border border-line bg-surface-1/88 px-2.5 py-1.5 text-[11px] text-fg backdrop-blur-sm transition-[background-color,color] duration-150 hover:bg-surface-1 hover:text-accent"
+								onclick={() => void scrollConversationToBottom('smooth')}
+								aria-label="Scroll to bottom"
+							>
+								<CaretDownIcon size={12} />
+								<span class="text-xs">Scroll to bottom</span>
+							</button>
+						</div>
+					{/if}
 
 				{#if activeFooterRequests.length > 0}
 					<div class="mb-3 grid gap-3">
