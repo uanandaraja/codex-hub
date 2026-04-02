@@ -224,7 +224,7 @@
 
 {#if item.type === 'commandExecution'}
 	<div class={toolWrapperClass}>
-		<div class={`${toolBlockClass} ${commandStateClass}`}>
+		<div class={`tool-activity-shell ${toolBlockClass} ${commandStateClass}`}>
 			<p class="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 text-[12px] leading-[1.55]">
 				<span class="shrink-0 text-muted">{commandLabel}</span>
 				<span class="shrink-0 text-muted">$</span>
@@ -241,7 +241,7 @@
 	</div>
 {:else if fileChangeLines.length > 0}
 	<div class={toolWrapperClass}>
-		<div class={`${toolBlockClass} grid gap-1`}>
+		<div class={`tool-activity-shell ${toolBlockClass} grid gap-1`}>
 			{#each fileChangeLines as line}
 				<p class="flex min-w-0 gap-2 text-[12px] leading-[1.55]">
 					<span class="shrink-0 text-muted">{fileChangeLabel(line.tone)}</span>
@@ -256,3 +256,12 @@
 		{/if}
 	</div>
 {/if}
+
+<style>
+	.tool-activity-shell,
+	.tool-activity-shell :global(*),
+	.tool-activity-shell :global(*::before),
+	.tool-activity-shell :global(*::after) {
+		border-radius: 0 !important;
+	}
+</style>

@@ -142,8 +142,7 @@
 	const inlineSelectClass = 'w-full min-w-0';
 	const settingsSectionLabelClass =
 		'flex items-center gap-2 px-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted';
-	const mobileModelClass =
-		'w-full min-w-0 !border-0 !bg-transparent !pl-1.5 !pr-1 focus-visible:text-accent';
+	const mobileModelClass = '!border-0 !bg-transparent !pl-1.5 !pr-1 focus-visible:text-accent';
 	const desktopModelClass =
 		'min-[821px]:max-w-[9.4rem] min-[821px]:!border-0 min-[821px]:!bg-transparent min-[821px]:!pl-1.5 min-[821px]:!pr-1 min-[821px]:focus-visible:text-accent';
 	const ghostButtonClass =
@@ -1032,7 +1031,7 @@
 
 	<div class="-mt-px px-2 py-2">
 		<div
-			class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 min-[821px]:hidden"
+			class="grid grid-cols-[auto_auto_auto_minmax(0,1fr)] items-center gap-2 min-[821px]:hidden"
 		>
 			<AppSelect
 				bind:value={selectedModel}
@@ -1120,7 +1119,7 @@
 					: 'Send message'}
 				onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
 				disabled={isStreaming ? stopDisabled : sendDisabled}
-				class="inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-0 text-fg transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+				class="justify-self-end inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
 			>
 				{#if isStreaming}
 					{#if isInterrupting}
@@ -1227,7 +1226,7 @@
 					: 'Send message'}
 				onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
 				disabled={isStreaming ? stopDisabled : sendDisabled}
-				class="justify-self-end inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-0 text-fg transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+				class="justify-self-end inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
 			>
 				{#if isStreaming}
 					{#if isInterrupting}
