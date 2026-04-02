@@ -135,8 +135,8 @@
 	}
 </script>
 
-<section class="border-t border-line px-[1.1rem] py-[1.05rem]">
-	<div class="border border-line bg-surface-0">
+<section class="rounded-none border-t border-line px-[1.1rem] py-[1.05rem]">
+	<div class="rounded-none border border-line bg-surface-0">
 		<button
 			type="button"
 			class="w-full text-left transition-[border-color,background-color] duration-150 hover:bg-accent-soft-hover"
