@@ -83,12 +83,8 @@
 			data.errors.threads ??
 			null
 	);
-	const initialProjectPath = untrack(
-		() => data.initialProjectPath ?? initialProjects[0]?.path ?? null
-	);
-	const initialThreadId = untrack(
-		() => data.initialThreadId ?? resolveInitialThreadId(initialThreads)
-	);
+	const initialProjectPath = untrack(() => data.initialProjectPath ?? null);
+	const initialThreadId = untrack(() => data.initialThreadId ?? null);
 	const initialDetailedThread = untrack(() => data.initialThread ?? null);
 	const initialThreadUsage = untrack(() => data.initialThreadUsage ?? {});
 	const initialThreadTruncatedTurnCount = untrack(() => data.initialThreadTruncatedTurnCount ?? 0);
@@ -184,6 +180,26 @@
 		'pointer-events-none inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
+	);
+	const showHomeScreen = $derived.by(() => !selectedProjectPath && projects.length > 0);
+	const homeProjects = $derived.by<ProjectSummary[]>(() =>
+		[...projects]
+			.sort((left, right) => {
+				const byActivity = right.updatedAt - left.updatedAt;
+				if (byActivity !== 0) {
+					return byActivity;
+				}
+
+				const byThreadCount = right.threadCount - left.threadCount;
+				if (byThreadCount !== 0) {
+					return byThreadCount;
+				}
+
+				return left.name.localeCompare(right.name, undefined, {
+					sensitivity: 'base'
+				});
+			})
+			.slice(0, 3)
 	);
 	const selectedModelSummary = $derived.by<ModelSummary | null>(
 		() => models.find((model) => model.model === selectedModel) ?? null
@@ -320,19 +336,6 @@
 			selectedComposerDraftKey,
 			readComposerDraft()
 		);
-	});
-
-	$effect(() => {
-		if (!selectedProjectPath && projects[0]) {
-			const projectPath = projects[0].path;
-			selectedProjectPath = projectPath;
-			if (!(projectPath in expandedProjectPaths)) {
-				expandedProjectPaths = {
-					...expandedProjectPaths,
-					[projectPath]: true
-				};
-			}
-		}
 	});
 
 	$effect(() => {
@@ -625,12 +628,7 @@
 			const nextProjects = sortProjects(nextProjectsResult.data);
 			projects = nextProjects;
 
-			const nextProjectPath =
-				selectedProjectPath && nextProjects.some((project) => project.path === selectedProjectPath)
-					? selectedProjectPath
-					: (nextProjects[0]?.path ?? null);
-
-			if (!nextProjectPath) {
+			if (nextProjects.length === 0) {
 				selectedProjectPath = null;
 				selectedThreadId = null;
 				threads = [];
@@ -640,6 +638,17 @@
 				banner = null;
 				return;
 			}
+
+			if (!selectedProjectPath) {
+				selectedThreadId = null;
+				threads = [];
+				banner = null;
+				return;
+			}
+
+			const nextProjectPath = nextProjects.some((project) => project.path === selectedProjectPath)
+				? selectedProjectPath
+				: (nextProjects[0]?.path ?? null);
 
 			if (!(nextProjectPath in expandedProjectPaths)) {
 				expandedProjectPaths = {
@@ -1800,10 +1809,6 @@
 			createdAt: Date.now(),
 			params: requestParams
 		} as PendingServerRequest;
-	}
-
-	function resolveInitialThreadId(initialThreadsList: CodexThread[]): string | null {
-		return initialThreadsList[0]?.id ?? null;
 	}
 
 	function applyThreadNameLocally(threadId: string, name: string): void {
@@ -3005,6 +3010,14 @@
 		}
 	}
 
+	function goHome(): void {
+		selectedProjectPath = null;
+		selectedThreadId = null;
+		threads = [];
+		banner = null;
+		collapseSidebarOnMobile();
+	}
+
 	function syncUrlState(): void {
 		const url = new URL(window.location.href);
 
@@ -3133,12 +3146,16 @@
 		<div
 			class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 rounded-none border-b border-line px-[1.1rem] py-[1.05rem]"
 		>
-			<div class="min-w-0">
-				<p class="mb-[0.35rem] truncate text-[0.72rem] uppercase tracking-[0.12em] text-muted">
+			<button
+				type="button"
+				class="flex min-w-0 flex-1 items-center border-0 bg-transparent p-0 text-left"
+				onclick={goHome}
+				aria-label="Go to home"
+			>
+				<h1 class="truncate text-[0.95rem] font-medium uppercase tracking-[0.12em] text-muted">
 					Codex Hub
-				</p>
-				<h1 class="truncate text-base font-semibold tracking-[-0.02em] text-fg">Projects</h1>
-			</div>
+				</h1>
+			</button>
 
 			<div class="flex shrink-0 items-center gap-2">
 				<button
@@ -3331,8 +3348,34 @@
 			bind:this={conversationBody}
 			onscroll={handleConversationScroll}
 		>
-			<div class="mx-auto flex w-full max-w-[680px] flex-col">
-				{#if !selectedProjectPath}
+			<div
+				class={`mx-auto flex min-h-full w-full flex-col ${showHomeScreen ? 'max-w-[720px]' : 'max-w-[680px]'}`}
+			>
+				{#if showHomeScreen}
+					<div class="flex flex-1 flex-col items-center justify-center px-3 py-10 text-center min-[821px]:py-16">
+						<h2 class="text-[clamp(1.4rem,4vw,2rem)] font-medium tracking-[-0.04em] text-fg">
+							Codex Hub
+						</h2>
+						<div class="mt-10 w-full rounded-none border-t border-line">
+							{#each homeProjects as project (project.path)}
+								<div class="group flex items-center gap-3 rounded-none border-b border-line py-4 text-left transition-colors duration-150 hover:bg-surface-1/35">
+									<button
+										type="button"
+										class="min-w-0 flex-1 cursor-pointer rounded-none border-0 bg-transparent p-0 text-left"
+										onclick={() => void handleProjectSelect(project.path)}
+									>
+										<p class="truncate text-[0.95rem] font-normal tracking-[-0.03em] text-fg transition-colors duration-150 group-hover:text-accent">
+											{project.name}
+										</p>
+										<p class="truncate font-mono text-[0.72rem] text-muted transition-colors duration-150 group-hover:text-fg/72">
+											{shortPath(project.path)}
+										</p>
+									</button>
+								</div>
+							{/each}
+						</div>
+					</div>
+				{:else if !selectedProjectPath}
 					<div class="mb-4 grid w-full gap-[0.4rem] border border-line p-[1.15rem] text-muted">
 						<strong>no projects yet</strong>
 						<span>projects appear once they have codex chats.</span>
@@ -3464,7 +3507,7 @@
 					bind:selectedPermissionPreset
 					{models}
 					projectPath={selectedProjectPath}
-					placeholder="enter your message"
+					placeholder={showHomeScreen ? 'pick a project to start building' : 'enter your message'}
 					disabled={!selectedProjectPath}
 					isStreaming={selectedActiveTurnId !== null}
 					canInterrupt={canInterruptActiveTurn}

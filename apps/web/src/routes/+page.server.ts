@@ -27,7 +27,7 @@ export const load: PageServerLoad = async ({ url }) => {
 		requestedProjectPath &&
 		availableProjects.some((project) => project.path === requestedProjectPath)
 			? requestedProjectPath
-			: (availableProjects[0]?.path ?? null);
+			: null;
 
 	let threads: ThreadListResponse['data'] = [];
 	let threadsError: string | null = null;
@@ -51,7 +51,7 @@ export const load: PageServerLoad = async ({ url }) => {
 
 	if (requestedThreadId && threads.some((thread) => thread.id === requestedThreadId)) {
 		initialThreadId = requestedThreadId;
-	} else {
+	} else if (initialProjectPath) {
 		initialThreadId = threads[0]?.id ?? null;
 	}
 
