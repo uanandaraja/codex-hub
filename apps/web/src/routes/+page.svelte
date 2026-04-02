@@ -159,6 +159,8 @@
 	const threadEventSources = new Map<string, EventSource>();
 	const threadEventsReadyByThread = new Map<string, Promise<void>>();
 	let suppressNextAutoScroll = false;
+	let showScrollToBottom = $state(false);
+	const conversationBottomThresholdPx = 56;
 
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
@@ -171,7 +173,7 @@
 	const projectSelectButtonClass =
 		'flex min-w-0 flex-1 items-center border-0 bg-transparent py-[0.95rem] pr-2 text-left text-fg';
 	const projectCreateButtonClass =
-		'pointer-events-none mr-[0.55rem] inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color,background-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
+		'mr-[0.55rem] inline-flex h-8 w-8 shrink-0 items-center justify-center border-0 bg-surface-1 text-fg transition-[opacity,color,border-color,background-color] duration-150 min-[821px]:pointer-events-none min-[821px]:border-transparent min-[821px]:bg-transparent min-[821px]:text-muted min-[821px]:opacity-0 min-[821px]:group-hover:pointer-events-auto min-[821px]:group-hover:opacity-100 min-[821px]:group-focus-within:pointer-events-auto min-[821px]:group-focus-within:opacity-100 min-[821px]:hover:border-line min-[821px]:hover:text-fg min-[821px]:focus-visible:border-line min-[821px]:focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
 	const projectPinButtonClass =
 		'pointer-events-none inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color,background-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg';
 	const chatRowClass =
@@ -485,9 +487,23 @@
 		void activeQuestionRequests;
 		if (suppressNextAutoScroll) {
 			suppressNextAutoScroll = false;
+			void tick().then(() => {
+				syncConversationScrollState();
+			});
+			return;
+		}
+		if (untrack(() => showScrollToBottom)) {
+			void tick().then(() => {
+				syncConversationScrollState();
+			});
 			return;
 		}
 		void scrollConversationToBottom();
+	});
+
+	$effect(() => {
+		void selectedThreadId;
+		showScrollToBottom = false;
 	});
 
 	$effect(() => {
@@ -2951,9 +2967,25 @@
 		);
 	}
 
-	async function scrollConversationToBottom(): Promise<void> {
+	function syncConversationScrollState(): void {
+		if (!conversationBody) {
+			showScrollToBottom = false;
+			return;
+		}
+
+		const distanceFromBottom =
+			conversationBody.scrollHeight - conversationBody.scrollTop - conversationBody.clientHeight;
+		showScrollToBottom = distanceFromBottom > conversationBottomThresholdPx;
+	}
+
+	function handleConversationScroll(): void {
+		syncConversationScrollState();
+	}
+
+	async function scrollConversationToBottom(behavior: ScrollBehavior = 'auto'): Promise<void> {
 		await tick();
-		conversationBody?.scrollTo({ top: conversationBody.scrollHeight });
+		conversationBody?.scrollTo({ top: conversationBody.scrollHeight, behavior });
+		showScrollToBottom = false;
 	}
 
 	function toggleSidebar(): void {
@@ -3096,10 +3128,10 @@
 	{/if}
 
 	<aside
-		class={`fixed inset-y-0 left-0 z-40 flex w-[19rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
+		class={`fixed inset-y-0 left-0 z-40 flex w-[19rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden rounded-none border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
 	>
 		<div
-			class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 border-b border-line px-[1.1rem] py-[1.05rem]"
+			class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 rounded-none border-b border-line px-[1.1rem] py-[1.05rem]"
 		>
 			<div class="min-w-0">
 				<p class="mb-[0.35rem] truncate text-[0.72rem] uppercase tracking-[0.12em] text-muted">
@@ -3110,7 +3142,7 @@
 
 			<div class="flex shrink-0 items-center gap-2">
 				<button
-					class={iconButtonClass}
+					class={`${iconButtonClass} rounded-none border-0`}
 					type="button"
 					onclick={closeSidebar}
 					aria-label="Hide sidebar"
@@ -3297,6 +3329,7 @@
 		<section
 			class="min-h-0 overflow-x-hidden overflow-y-auto px-[1.1rem] pt-[5rem] pb-8 min-[821px]:pt-8"
 			bind:this={conversationBody}
+			onscroll={handleConversationScroll}
 		>
 			<div class="mx-auto flex w-full max-w-[680px] flex-col">
 				{#if !selectedProjectPath}
@@ -3395,6 +3428,19 @@
 				class="theme-bg-footer-fade pointer-events-none absolute inset-x-0 top-0 h-20 backdrop-blur-[10px]"
 			></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
+				{#if showScrollToBottom}
+					<div class="pointer-events-none absolute right-3 bottom-full mb-3">
+						<button
+							type="button"
+							class="pointer-events-auto inline-flex h-10 w-10 items-center justify-center border border-line bg-surface-1/88 text-fg backdrop-blur-sm transition-[border-color,background-color,color] duration-150 hover:border-accent hover:text-accent"
+							onclick={() => void scrollConversationToBottom('smooth')}
+							aria-label="Scroll to bottom"
+						>
+							<CaretDownIcon size={18} />
+						</button>
+					</div>
+				{/if}
+
 				{#if activeFooterRequests.length > 0}
 					<div class="mb-3 grid gap-3">
 						{#each activeFooterRequests as request (request.requestId)}

@@ -169,12 +169,12 @@
 		</button>
 
 		{#if expanded}
-			<div id="sidebar-account-limits" class="border-t border-line px-[0.95rem] pb-[0.95rem] pt-3">
+			<div id="sidebar-account-limits" class="px-[0.95rem] pb-[0.95rem] pt-3">
 				{#if account}
-					<div class="mb-3 grid gap-[0.35rem] text-[0.76rem] text-muted">
+					<div class="mb-3 grid gap-[0.35rem] rounded-none border-0 text-[0.76rem] text-muted">
 						<p>{account.providerLabel}{account.planType ? ` • ${formatPlanLabel(account.planType)}` : ''}</p>
 						{#if account.email}
-							<p class="font-mono text-[0.72rem] text-fg">{account.email}</p>
+							<p class="rounded-none border-0 font-mono text-[0.72rem] text-fg">{account.email}</p>
 						{/if}
 						{#if account.rateLimitsUpdatedAt}
 							<p>last synced {formatResetLabel(account.rateLimitsUpdatedAt)}</p>
