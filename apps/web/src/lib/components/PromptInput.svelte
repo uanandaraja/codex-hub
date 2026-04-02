@@ -150,8 +150,8 @@
 		'min-[821px]:max-w-[9.4rem] min-[821px]:!border-0 min-[821px]:!bg-transparent min-[821px]:!pl-1.5 min-[821px]:!pr-1 min-[821px]:focus-visible:text-accent';
 	const ghostButtonClass =
 		'inline-flex h-9 w-9 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent focus-visible:text-accent disabled:cursor-not-allowed disabled:opacity-40';
-	const desktopBranchLabelClass =
-		'inline-flex max-w-[16rem] items-center gap-1.5 overflow-hidden font-mono text-[11px] text-muted';
+	const branchLabelClass =
+		'inline-flex max-w-full items-center gap-1.5 overflow-hidden font-mono text-[11px] text-muted min-[821px]:max-w-[16rem]';
 	const activeMentionQuery = $derived.by<MentionQueryMatch | null>(() =>
 		projectPath && !editorDisabled ? readActiveMentionQuery(value, selectionStart, selectionEnd) : null
 	);
@@ -928,193 +928,114 @@
 	}
 </script>
 
-<div
-	class="relative w-full overflow-hidden border border-line bg-surface-1 transition-[background-color] duration-150 focus-within:bg-surface-1"
-	class:opacity-50={disabled && !isStreaming}
->
-	<input
-		bind:this={fileInputRef}
-		type="file"
-		accept={supportedImageAccept}
-		multiple
-		disabled={attachmentDisabled}
-		onchange={handleFileInputChange}
-		class="sr-only"
-		tabindex="-1"
-		aria-hidden="true"
-	/>
+<div class="grid w-full gap-2">
+	<div
+		class="relative w-full overflow-hidden border border-line bg-surface-1 transition-[background-color] duration-150 focus-within:bg-surface-1"
+		class:opacity-50={disabled && !isStreaming}
+	>
+		<input
+			bind:this={fileInputRef}
+			type="file"
+			accept={supportedImageAccept}
+			multiple
+			disabled={attachmentDisabled}
+			onchange={handleFileInputChange}
+			class="sr-only"
+			tabindex="-1"
+			aria-hidden="true"
+		/>
 
-	<div class="px-4 pt-4">
-		<div
-			bind:this={editorRef}
-			contenteditable={editorDisabled ? 'false' : 'true'}
-			tabindex={editorDisabled ? -1 : 0}
-			role="textbox"
-			aria-multiline="true"
-			aria-label="Prompt input"
-			data-placeholder={placeholder}
-			data-empty={showPlaceholder ? 'true' : 'false'}
-			oninput={handleEditorInput}
-			onclick={handleEditorClick}
-			onfocus={syncSelectionFromEditor}
-			onkeyup={syncSelectionFromEditor}
-			onpaste={handleEditorPaste}
-			onbeforeinput={handleBeforeInput}
-			onkeydown={handleKeydown}
-			class="composer-editor min-h-[136px] max-h-56 overflow-y-auto whitespace-pre-wrap break-words bg-transparent pb-4 text-[16px] leading-relaxed text-fg outline-none min-[821px]:min-h-[120px] min-[821px]:text-[14px]"
-		></div>
-	</div>
-
-	{#if mentionSearchVisible}
-		<div class="-mt-2 px-3 pb-3">
+		<div class="px-4 pt-4">
 			<div
-				class="theme-shadow-elevated-soft overflow-hidden border border-line bg-surface-0"
-			>
-				{#if activeMentionQuery?.query.length === 0}
-					<div class="px-3 py-2.5 text-[12px] text-muted">Type after `@` to search project files</div>
-				{:else if mentionSearchLoading}
-					<div class="flex items-center gap-2 px-3 py-2.5 text-[12px] text-muted">
-						<SpinnerGapIcon size={14} class="animate-spin" />
-						<span>Searching project files</span>
-					</div>
-				{:else if mentionSearchHasResults}
-					<div class="grid">
-						{#each mentionSearchResults as result, index (`${result.root}/${result.path}`)}
+				bind:this={editorRef}
+				contenteditable={editorDisabled ? 'false' : 'true'}
+				tabindex={editorDisabled ? -1 : 0}
+				role="textbox"
+				aria-multiline="true"
+				aria-label="Prompt input"
+				data-placeholder={placeholder}
+				data-empty={showPlaceholder ? 'true' : 'false'}
+				oninput={handleEditorInput}
+				onclick={handleEditorClick}
+				onfocus={syncSelectionFromEditor}
+				onkeyup={syncSelectionFromEditor}
+				onpaste={handleEditorPaste}
+				onbeforeinput={handleBeforeInput}
+				onkeydown={handleKeydown}
+				class="composer-editor min-h-[104px] max-h-56 overflow-y-auto whitespace-pre-wrap break-words bg-transparent pb-3 text-[16px] leading-relaxed text-fg outline-none min-[821px]:min-h-[92px] min-[821px]:text-[14px]"
+			></div>
+		</div>
+
+		{#if mentionSearchVisible}
+			<div class="-mt-2 px-3 pb-3">
+				<div
+					class="theme-shadow-elevated-soft overflow-hidden border border-line bg-surface-0"
+				>
+					{#if activeMentionQuery?.query.length === 0}
+						<div class="px-3 py-2.5 text-[12px] text-muted">Type after `@` to search project files</div>
+					{:else if mentionSearchLoading}
+						<div class="flex items-center gap-2 px-3 py-2.5 text-[12px] text-muted">
+							<SpinnerGapIcon size={14} class="animate-spin" />
+							<span>Searching project files</span>
+						</div>
+					{:else if mentionSearchHasResults}
+						<div class="grid">
+							{#each mentionSearchResults as result, index (`${result.root}/${result.path}`)}
+								<button
+									type="button"
+									class="grid gap-0.5 border-b border-line px-3 py-2.5 text-left transition-colors duration-150 last:border-b-0 hover:bg-surface-1"
+									class:bg-surface-1={index === mentionSearchIndex}
+									onmousedown={(event) => event.preventDefault()}
+									onclick={() => void insertMention(result)}
+								>
+									<span class="truncate text-[12px] font-medium text-fg">{result.file_name}</span>
+									<span class="truncate font-mono text-[11px] text-muted">{result.path}</span>
+								</button>
+							{/each}
+						</div>
+					{:else}
+						<div class="px-3 py-2.5 text-[12px] text-muted">
+							{mentionSearchError ?? 'No matching files found'}
+						</div>
+					{/if}
+				</div>
+			</div>
+		{/if}
+
+		{#if attachments.length > 0}
+			<div class="grid gap-2 px-3 pb-3">
+				<div class="flex flex-wrap gap-2">
+					{#each attachments as attachment (attachment.id)}
+						<div class="group relative h-24 w-24 overflow-hidden border border-line bg-surface-0">
+							<img
+								src={attachment.previewUrl}
+								alt={attachment.file.name}
+								class="h-full w-full object-cover"
+							/>
+
+							<div
+								class="theme-bg-attachment-caption absolute inset-x-0 bottom-0 px-2 py-1.5"
+							>
+								<p class="truncate text-[10px] font-medium text-fg">{attachment.file.name}</p>
+								<p class="text-[10px] text-muted">{formatAttachmentSize(attachment.file.size)}</p>
+							</div>
+
 							<button
 								type="button"
-								class="grid gap-0.5 border-b border-line px-3 py-2.5 text-left transition-colors duration-150 last:border-b-0 hover:bg-surface-1"
-								class:bg-surface-1={index === mentionSearchIndex}
-								onmousedown={(event) => event.preventDefault()}
-								onclick={() => void insertMention(result)}
+								aria-label={`Remove ${attachment.file.name}`}
+								onclick={() => removeAttachment(attachment.id)}
+								disabled={attachmentDisabled}
+								class="absolute top-1 right-1 inline-flex h-6 w-6 items-center justify-center border border-line bg-surface-1/92 text-muted transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent"
 							>
-								<span class="truncate text-[12px] font-medium text-fg">{result.file_name}</span>
-								<span class="truncate font-mono text-[11px] text-muted">{result.path}</span>
+								<XIcon size={12} />
 							</button>
-						{/each}
-					</div>
-				{:else}
-					<div class="px-3 py-2.5 text-[12px] text-muted">
-						{mentionSearchError ?? 'No matching files found'}
-					</div>
-				{/if}
+						</div>
+					{/each}
+				</div>
 			</div>
-		</div>
-	{/if}
+		{/if}
 
-	{#if attachments.length > 0}
-		<div class="grid gap-2 px-3 pb-3">
-			<div class="flex flex-wrap gap-2">
-				{#each attachments as attachment (attachment.id)}
-					<div class="group relative h-24 w-24 overflow-hidden border border-line bg-surface-0">
-						<img
-							src={attachment.previewUrl}
-							alt={attachment.file.name}
-							class="h-full w-full object-cover"
-						/>
-
-						<div
-							class="theme-bg-attachment-caption absolute inset-x-0 bottom-0 px-2 py-1.5"
-						>
-							<p class="truncate text-[10px] font-medium text-fg">{attachment.file.name}</p>
-							<p class="text-[10px] text-muted">{formatAttachmentSize(attachment.file.size)}</p>
-						</div>
-
-						<button
-							type="button"
-							aria-label={`Remove ${attachment.file.name}`}
-							onclick={() => removeAttachment(attachment.id)}
-							disabled={attachmentDisabled}
-							class="absolute top-1 right-1 inline-flex h-6 w-6 items-center justify-center border border-line bg-surface-1/92 text-muted transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent"
-						>
-							<XIcon size={12} />
-						</button>
-					</div>
-				{/each}
-			</div>
-		</div>
-	{/if}
-
-	<div class="-mt-px px-2 py-2">
-		<div
-			class="grid grid-cols-[auto_auto_auto_minmax(0,1fr)] items-center gap-2 min-[821px]:hidden"
-		>
-			<AppSelect
-				bind:value={selectedModel}
-				items={modelOptions}
-				placeholder="default"
-				triggerClass={mobileModelClass}
-				ariaLabel="Model"
-			/>
-
-			<Popover.Root bind:open={advancedOpen}>
-				<Popover.Trigger
-					class={ghostButtonClass}
-					aria-label="Advanced options"
-				>
-					<GearSixIcon size={16} />
-				</Popover.Trigger>
-
-				<Popover.Portal>
-					<Popover.Content
-						sideOffset={10}
-						align="start"
-						class="theme-shadow-elevated-strong z-50 grid w-[min(18rem,calc(100vw-1rem))] gap-2 border border-line bg-surface-1 p-2 outline-none min-[821px]:hidden"
-					>
-						<div class="grid gap-1.5">
-							<div class={settingsSectionLabelClass}>
-								<BrainIcon size={12} />
-								<span>Thinking Mode</span>
-							</div>
-							<AppSelect
-								bind:value={selectedEffort}
-								items={effortSelectOptions}
-								placeholder="effort"
-								triggerClass={inlineSelectClass}
-								ariaLabel="Reasoning effort"
-							/>
-						</div>
-
-						<div class="grid gap-1.5">
-							<div class={settingsSectionLabelClass}>
-								<ListChecksIcon size={12} />
-								<span>Build / Plan</span>
-							</div>
-							<AppSelect
-								bind:value={selectedMode}
-								items={modeOptions}
-								placeholder="mode"
-								triggerClass={inlineSelectClass}
-								ariaLabel="Prompt mode"
-							/>
-						</div>
-
-						<div class="grid gap-1.5">
-							<div class={settingsSectionLabelClass}>
-								<ShieldCheckIcon size={12} />
-								<span>Permissions</span>
-							</div>
-							<AppSelect
-								bind:value={selectedPermissionPreset}
-								items={permissionOptions}
-								placeholder="permissions"
-								triggerClass={inlineSelectClass}
-								ariaLabel="Permission preset"
-							/>
-						</div>
-					</Popover.Content>
-				</Popover.Portal>
-			</Popover.Root>
-
-			<button
-				type="button"
-				class={ghostButtonClass}
-				onclick={openFilePicker}
-				aria-label="Attach images"
-				disabled={attachmentDisabled}
-			>
-				<PaperclipIcon size={16} />
-			</button>
-
+		<div class="-mt-px flex justify-end px-2 py-1.5">
 			<button
 				type="button"
 				aria-label={isStreaming
@@ -1124,7 +1045,7 @@
 					: 'Send message'}
 				onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
 				disabled={isStreaming ? stopDisabled : sendDisabled}
-				class="justify-self-end inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+				class="inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
 			>
 				{#if isStreaming}
 					{#if isInterrupting}
@@ -1139,20 +1060,19 @@
 				{/if}
 			</button>
 		</div>
+	</div>
 
-		<div
-			class="hidden min-[821px]:grid min-[821px]:grid-cols-[minmax(0,1fr)_auto] min-[821px]:items-end min-[821px]:gap-2"
-		>
-			<div class="flex min-w-0 flex-wrap items-center gap-2">
+		<div class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 px-2 min-[821px]:hidden">
+			<div class="flex min-w-0 items-center gap-2">
 				<AppSelect
 					bind:value={selectedModel}
 					items={modelOptions}
 					placeholder="default"
-					triggerClass={`${controlTriggerClass} ${desktopModelClass}`}
+					triggerClass={mobileModelClass}
 					ariaLabel="Model"
 				/>
 
-				<Popover.Root bind:open={desktopAdvancedOpen}>
+				<Popover.Root bind:open={advancedOpen}>
 					<Popover.Trigger
 						class={ghostButtonClass}
 						aria-label="Advanced options"
@@ -1164,7 +1084,7 @@
 						<Popover.Content
 							sideOffset={10}
 							align="start"
-							class="theme-shadow-elevated-strong z-50 grid w-[18rem] gap-2 border border-line bg-surface-1 p-2 outline-none"
+							class="theme-shadow-elevated-strong z-50 grid w-[min(18rem,calc(100vw-1rem))] gap-2 border border-line bg-surface-1 p-2 outline-none min-[821px]:hidden"
 						>
 							<div class="grid gap-1.5">
 								<div class={settingsSectionLabelClass}>
@@ -1222,39 +1142,100 @@
 				</button>
 			</div>
 
-			<div class="flex items-center justify-end gap-2">
-				{#if branchLabel}
-					<div class={desktopBranchLabelClass} title={branchLabel}>
-						<GitBranchIcon size={12} />
-						<span class="truncate">{branchLabel}</span>
-					</div>
-				{/if}
-
-				<button
-					type="button"
-					aria-label={isStreaming
-						? isInterrupting
-							? 'Stopping agent'
-							: 'Stop agent'
-						: 'Send message'}
-					onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
-					disabled={isStreaming ? stopDisabled : sendDisabled}
-					class="justify-self-end inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
-				>
-					{#if isStreaming}
-						{#if isInterrupting}
-							<SpinnerGapIcon size={16} class="animate-spin" />
-						{:else}
-							<StopCircleIcon size={16} />
-						{/if}
-					{:else if isSending}
-						<SpinnerGapIcon size={16} class="animate-spin" />
-					{:else}
-						<ArrowUpIcon size={16} />
-					{/if}
-				</button>
-			</div>
+			{#if branchLabel}
+				<div class={`${branchLabelClass} justify-self-end`} title={branchLabel}>
+					<GitBranchIcon size={12} />
+					<span class="truncate">{branchLabel}</span>
+				</div>
+			{/if}
 		</div>
+
+	<div class="hidden min-[821px]:grid min-[821px]:grid-cols-[minmax(0,1fr)_auto] min-[821px]:items-center min-[821px]:gap-3 min-[821px]:px-2">
+		<div class="flex min-w-0 items-center gap-2">
+			<AppSelect
+				bind:value={selectedModel}
+				items={modelOptions}
+				placeholder="default"
+				triggerClass={`${controlTriggerClass} ${desktopModelClass}`}
+				ariaLabel="Model"
+			/>
+
+			<Popover.Root bind:open={desktopAdvancedOpen}>
+				<Popover.Trigger
+					class={ghostButtonClass}
+					aria-label="Advanced options"
+				>
+					<GearSixIcon size={16} />
+				</Popover.Trigger>
+
+				<Popover.Portal>
+					<Popover.Content
+						sideOffset={10}
+						align="start"
+						class="theme-shadow-elevated-strong z-50 grid w-[18rem] gap-2 border border-line bg-surface-1 p-2 outline-none"
+					>
+						<div class="grid gap-1.5">
+							<div class={settingsSectionLabelClass}>
+								<BrainIcon size={12} />
+								<span>Thinking Mode</span>
+							</div>
+							<AppSelect
+								bind:value={selectedEffort}
+								items={effortSelectOptions}
+								placeholder="effort"
+								triggerClass={inlineSelectClass}
+								ariaLabel="Reasoning effort"
+							/>
+						</div>
+
+						<div class="grid gap-1.5">
+							<div class={settingsSectionLabelClass}>
+								<ListChecksIcon size={12} />
+								<span>Build / Plan</span>
+							</div>
+							<AppSelect
+								bind:value={selectedMode}
+								items={modeOptions}
+								placeholder="mode"
+								triggerClass={inlineSelectClass}
+								ariaLabel="Prompt mode"
+							/>
+						</div>
+
+						<div class="grid gap-1.5">
+							<div class={settingsSectionLabelClass}>
+								<ShieldCheckIcon size={12} />
+								<span>Permissions</span>
+							</div>
+							<AppSelect
+								bind:value={selectedPermissionPreset}
+								items={permissionOptions}
+								placeholder="permissions"
+								triggerClass={inlineSelectClass}
+								ariaLabel="Permission preset"
+							/>
+						</div>
+					</Popover.Content>
+				</Popover.Portal>
+			</Popover.Root>
+
+			<button
+				type="button"
+				class={ghostButtonClass}
+				onclick={openFilePicker}
+				aria-label="Attach images"
+				disabled={attachmentDisabled}
+			>
+				<PaperclipIcon size={16} />
+			</button>
+		</div>
+
+		{#if branchLabel}
+			<div class={`${branchLabelClass} justify-self-end`} title={branchLabel}>
+				<GitBranchIcon size={12} />
+				<span class="truncate">{branchLabel}</span>
+			</div>
+		{/if}
 	</div>
 </div>
 
