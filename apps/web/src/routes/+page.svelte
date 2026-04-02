@@ -4,6 +4,7 @@
 		ArchiveIcon,
 		CaretDownIcon,
 		CaretRightIcon,
+		GitDiffIcon,
 		ListIcon,
 		PlusIcon,
 		PushPinIcon,
@@ -15,6 +16,7 @@
 	import PromptInput from '$lib/components/PromptInput.svelte';
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
 	import SidebarAccountStatus from '$lib/components/SidebarAccountStatus.svelte';
+	import ThreadDiffDrawer from '$lib/components/ThreadDiffDrawer.svelte';
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
 	import { formatModelDisplayName } from '$lib/model-display-name';
 	import type {
@@ -58,6 +60,15 @@
 	type FetchThreadOptions = {
 		fullHistory?: boolean;
 		includeUsage?: boolean;
+	};
+	type ThreadDiffPatch = {
+		id: string;
+		patch: string;
+	};
+	type ThreadDiffSection = {
+		id: string;
+		title: string | null;
+		patches: ThreadDiffPatch[];
 	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
@@ -156,6 +167,8 @@
 	const threadEventsReadyByThread = new Map<string, Promise<void>>();
 	let suppressNextAutoScroll = false;
 	let showScrollToBottom = $state(false);
+	let diffDrawerOpen = $state(false);
+	let liveTurnDiffsByThread = $state<Record<string, { turnId: string | null; diff: string }>>({});
 	const conversationBottomThresholdPx = 56;
 
 	const iconButtonClass =
@@ -235,6 +248,9 @@
 	const selectedThreadLabel = $derived.by(() =>
 		selectedThreadSummary ? chatLabel(selectedThreadSummary) : 'loading chat'
 	);
+	const selectedThreadBranch = $derived.by(() =>
+		readGitBranch(currentThread?.gitInfo ?? selectedThreadSummary?.gitInfo ?? null)
+	);
 	const isOpeningThread = $derived.by(
 		() => selectedThreadId !== null && selectedThreadSummary !== null && currentThread === null
 	);
@@ -287,6 +303,40 @@
 			? `/api/threads/${encodeURIComponent(selectedThreadId)}/editor`
 			: null
 	);
+	const selectedLiveTurnDiff = $derived.by(() =>
+		selectedThreadId ? (liveTurnDiffsByThread[selectedThreadId] ?? null) : null
+	);
+	const selectedThreadHistoryDiffPatches = $derived.by<ThreadDiffPatch[]>(() =>
+		currentThread ? collectThreadDiffPatches(currentThread, selectedProjectPath) : []
+	);
+	const selectedThreadDiffSections = $derived.by<ThreadDiffSection[]>(() => {
+		const sections: ThreadDiffSection[] = [];
+		const liveDiff = selectedLiveTurnDiff?.diff?.trim() ?? '';
+
+		if (liveDiff) {
+			sections.push({
+				id: 'live',
+				title: selectedThreadHistoryDiffPatches.length > 0 ? 'Current' : null,
+				patches: [
+					{
+						id: `live:${selectedThreadId ?? 'thread'}:${selectedLiveTurnDiff?.turnId ?? 'turn'}`,
+						patch: liveDiff
+					}
+				]
+			});
+		}
+
+		if (selectedThreadHistoryDiffPatches.length > 0) {
+			sections.push({
+				id: 'history',
+				title: liveDiff ? 'Changes' : null,
+				patches: selectedThreadHistoryDiffPatches
+			});
+		}
+
+		return sections;
+	});
+	const showDesktopDiffDrawer = $derived.by(() => diffDrawerOpen && selectedThreadId !== null);
 	const selectedComposerDraftKey = $derived.by(() =>
 		selectedThreadId
 			? `thread:${selectedThreadId}`
@@ -375,6 +425,14 @@
 
 		syncedPermissionThreadId = selectedThreadId;
 		selectedPermissionPreset = permissionPresetForThread(selectedThreadId);
+	});
+
+	$effect(() => {
+		if (selectedThreadId) {
+			return;
+		}
+
+		diffDrawerOpen = false;
 	});
 
 	$effect(() => {
@@ -798,6 +856,7 @@
 		loadingFullHistoryThreadIds = removeRecordEntry(loadingFullHistoryThreadIds, threadId);
 		threadPermissionPresets = removeRecordEntry(threadPermissionPresets, threadId);
 		pendingAttachmentReleases = removeRecordEntry(pendingAttachmentReleases, threadId);
+		liveTurnDiffsByThread = removeRecordEntry(liveTurnDiffsByThread, threadId);
 	}
 
 	function threadHasActiveTurn(threadId: string): boolean {
@@ -1374,6 +1433,14 @@
 			return;
 		}
 
+		if (notification.method === 'turn/diff/updated') {
+			const diff = readTurnDiff(notification.params);
+			if (diff) {
+				upsertLiveTurnDiff(threadId, readTurnId(notification.params), diff);
+			}
+			return;
+		}
+
 		if (notification.method === 'item/started' || notification.method === 'item/completed') {
 			if (!shouldRenderStreamingState) {
 				return;
@@ -1429,6 +1496,7 @@
 		const finalTurnId = activeTurnIdsByThread[threadId] ?? null;
 		const finalStartedAt = activeTurnStartedAtByThread[threadId] ?? null;
 		clearThreadActiveTurn(threadId);
+		clearLiveTurnDiff(threadId, finalTurnId);
 
 		try {
 			const tasks: Promise<void>[] = [refreshThreads()];
@@ -1744,6 +1812,15 @@
 			readStatusToken(params?.turnStatus) ??
 			readStatusToken(params?.status) ??
 			readStatusToken(params?.state)
+		);
+	}
+
+	function readTurnDiff(params?: Record<string, unknown>): string | null {
+		return (
+			readString(params?.diff) ??
+			readString(params?.patch) ??
+			readString(params?.unifiedDiff) ??
+			readString(params?.unified_diff)
 		);
 	}
 
@@ -2849,6 +2926,29 @@
 		updateTurnStatus(threadId, turnId, 'interrupted');
 	}
 
+	function upsertLiveTurnDiff(threadId: string, turnId: string | null, diff: string): void {
+		liveTurnDiffsByThread = {
+			...liveTurnDiffsByThread,
+			[threadId]: {
+				turnId,
+				diff
+			}
+		};
+	}
+
+	function clearLiveTurnDiff(threadId: string, turnId: string | null = null): void {
+		const current = liveTurnDiffsByThread[threadId];
+		if (!current) {
+			return;
+		}
+
+		if (turnId && current.turnId && current.turnId !== turnId) {
+			return;
+		}
+
+		liveTurnDiffsByThread = removeRecordEntry(liveTurnDiffsByThread, threadId);
+	}
+
 	function findLastTurnStatusAnchorIndex(items: CodexThreadItem[]): number {
 		for (let index = items.length - 1; index >= 0; index -= 1) {
 			const item = items[index];
@@ -3123,6 +3223,114 @@
 		threadEventsReadyByThread.set(threadId, readyPromise);
 		return readyPromise;
 	}
+
+	function readGitBranch(gitInfo: Record<string, unknown> | null): string | null {
+		if (!gitInfo) {
+			return null;
+		}
+
+		return (
+			readString(gitInfo.branch) ??
+			readString(gitInfo.ref) ??
+			readString(gitInfo.branchName) ??
+			null
+		);
+	}
+
+	function collectThreadDiffPatches(
+		thread: CodexThread,
+		projectRoot: string | null
+	): ThreadDiffPatch[] {
+		const patches: ThreadDiffPatch[] = [];
+
+		for (let turnIndex = thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
+			const turn = thread.turns[turnIndex];
+			for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
+				const item = turn.items[itemIndex];
+				if (!isFileChangeItem(item)) {
+					continue;
+				}
+
+				for (let changeIndex = item.changes.length - 1; changeIndex >= 0; changeIndex -= 1) {
+					const patch = buildSyntheticFilePatch(item.changes[changeIndex], projectRoot);
+					if (!patch) {
+						continue;
+					}
+
+					patches.push({
+						id: `${turn.id}:${item.id}:${changeIndex}`,
+						patch
+					});
+				}
+			}
+		}
+
+		return patches;
+	}
+
+	function buildSyntheticFilePatch(
+		change: Extract<CodexThreadItem, { type: 'fileChange' }>['changes'][number],
+		projectRoot: string | null
+	): string | null {
+		const rawDiff = change.diff?.trim();
+		if (!rawDiff) {
+			return null;
+		}
+
+		if (hasPatchHeader(rawDiff)) {
+			return rawDiff.endsWith('\n') ? rawDiff : `${rawDiff}\n`;
+		}
+
+		const currentPath = toPatchPath(change.path, projectRoot);
+		const movedPath = change.kind.move_path ? toPatchPath(change.kind.move_path, projectRoot) : null;
+		const diffBody = rawDiff.endsWith('\n') ? rawDiff : `${rawDiff}\n`;
+
+		switch (change.kind.type) {
+			case 'add':
+				return [
+					`diff --git a/${currentPath} b/${currentPath}`,
+					'new file mode 100644',
+					'--- /dev/null',
+					`+++ b/${currentPath}`,
+					diffBody
+				].join('\n');
+			case 'delete':
+				return [
+					`diff --git a/${currentPath} b/${currentPath}`,
+					'deleted file mode 100644',
+					`--- a/${currentPath}`,
+					'+++ /dev/null',
+					diffBody
+				].join('\n');
+			case 'update':
+			default: {
+				const nextPath = movedPath ?? currentPath;
+				return [
+					`diff --git a/${currentPath} b/${nextPath}`,
+					`--- a/${currentPath}`,
+					`+++ b/${nextPath}`,
+					diffBody
+				].join('\n');
+			}
+		}
+	}
+
+	function hasPatchHeader(diff: string): boolean {
+		const normalized = diff.trimStart();
+		return (
+			normalized.startsWith('diff --git') ||
+			(normalized.startsWith('--- ') && normalized.includes('\n+++ '))
+		);
+	}
+
+	function toPatchPath(path: string, projectRoot: string | null): string {
+		if (projectRoot && path.startsWith(projectRoot)) {
+			const relativePath = path.slice(projectRoot.length).replace(/^\/+/, '');
+			return relativePath || projectNameFromPath(projectRoot);
+		}
+
+		return path.replace(/^\/+/, '');
+	}
 </script>
 
 <svelte:head>
@@ -3312,9 +3520,11 @@
 	</aside>
 
 	<main
-		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''}`}
+		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''} ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
 	>
-		<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]">
+		<div
+			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
+		>
 			<div class="flex w-full items-center justify-between gap-3">
 				<div class="min-w-0">
 					<button
@@ -3328,20 +3538,47 @@
 					</button>
 				</div>
 
-				{#if selectedEditorHref}
-					<a
-						class={toolbarLinkClass}
-						href={selectedEditorHref}
-						target="_blank"
-						rel="noreferrer"
-						aria-label="Open current thread project in editor"
-					>
-						<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
-						<span>Open Editor</span>
-					</a>
-				{/if}
+				<div class="flex items-center justify-end gap-2">
+					{#if !showDesktopDiffDrawer}
+						{#if selectedThreadId}
+							<button
+								type="button"
+								class={`${toolbarLinkClass} ${showDesktopDiffDrawer ? 'border-accent text-accent' : ''}`}
+								onclick={() => (diffDrawerOpen = !diffDrawerOpen)}
+								aria-label={showDesktopDiffDrawer ? 'Hide diff' : 'Show diff'}
+								aria-pressed={showDesktopDiffDrawer}
+							>
+								<GitDiffIcon size={15} />
+								<span>Diff</span>
+							</button>
+						{/if}
+
+						{#if selectedEditorHref}
+							<a
+								class={toolbarLinkClass}
+								href={selectedEditorHref}
+								target="_blank"
+								rel="noreferrer"
+								aria-label="Open current thread project in editor"
+							>
+								<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
+								<span>Editor</span>
+							</a>
+						{/if}
+					{/if}
+				</div>
 			</div>
 		</div>
+
+		{#if showDesktopDiffDrawer}
+			<ThreadDiffDrawer
+				sections={selectedThreadDiffSections}
+				editorHref={selectedEditorHref}
+				onclose={() => {
+					diffDrawerOpen = false;
+				}}
+			/>
+		{/if}
 
 		<section
 			class="min-h-0 overflow-x-hidden overflow-y-auto px-[1.1rem] pt-[5rem] pb-8 min-[821px]:pt-8"
@@ -3507,6 +3744,7 @@
 					bind:selectedPermissionPreset
 					{models}
 					projectPath={selectedProjectPath}
+					branchLabel={selectedThreadBranch}
 					placeholder={showHomeScreen ? 'pick a project to start building' : 'enter your message'}
 					disabled={!selectedProjectPath}
 					isStreaming={selectedActiveTurnId !== null}

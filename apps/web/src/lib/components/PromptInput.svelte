@@ -3,6 +3,7 @@
 	import {
 		ArrowUpIcon,
 		BrainIcon,
+		GitBranchIcon,
 		GearSixIcon,
 		ListChecksIcon,
 		PaperclipIcon,
@@ -39,6 +40,7 @@
 		oninterrupt,
 		models = [],
 		projectPath = null,
+		branchLabel = null,
 		disabled = false,
 		isStreaming = false,
 		canInterrupt = false,
@@ -56,6 +58,7 @@
 		oninterrupt?: () => void | Promise<void>;
 		models?: ModelSummary[];
 		projectPath?: string | null;
+		branchLabel?: string | null;
 		disabled?: boolean;
 		isStreaming?: boolean;
 		canInterrupt?: boolean;
@@ -147,6 +150,8 @@
 		'min-[821px]:max-w-[9.4rem] min-[821px]:!border-0 min-[821px]:!bg-transparent min-[821px]:!pl-1.5 min-[821px]:!pr-1 min-[821px]:focus-visible:text-accent';
 	const ghostButtonClass =
 		'inline-flex h-9 w-9 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent focus-visible:text-accent disabled:cursor-not-allowed disabled:opacity-40';
+	const desktopBranchLabelClass =
+		'inline-flex max-w-[16rem] items-center gap-1.5 overflow-hidden font-mono text-[11px] text-muted';
 	const activeMentionQuery = $derived.by<MentionQueryMatch | null>(() =>
 		projectPath && !editorDisabled ? readActiveMentionQuery(value, selectionStart, selectionEnd) : null
 	);
@@ -1217,29 +1222,38 @@
 				</button>
 			</div>
 
-			<button
-				type="button"
-				aria-label={isStreaming
-					? isInterrupting
-						? 'Stopping agent'
-						: 'Stop agent'
-					: 'Send message'}
-				onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
-				disabled={isStreaming ? stopDisabled : sendDisabled}
-				class="justify-self-end inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
-			>
-				{#if isStreaming}
-					{#if isInterrupting}
+			<div class="flex items-center justify-end gap-2">
+				{#if branchLabel}
+					<div class={desktopBranchLabelClass} title={branchLabel}>
+						<GitBranchIcon size={12} />
+						<span class="truncate">{branchLabel}</span>
+					</div>
+				{/if}
+
+				<button
+					type="button"
+					aria-label={isStreaming
+						? isInterrupting
+							? 'Stopping agent'
+							: 'Stop agent'
+						: 'Send message'}
+					onclick={() => void (isStreaming ? handleInterrupt() : handleSubmit())}
+					disabled={isStreaming ? stopDisabled : sendDisabled}
+					class="justify-self-end inline-flex h-10 w-10 items-center justify-center bg-surface-0 text-fg transition-[background-color,color] duration-150 hover:text-accent focus:outline-none focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-40"
+				>
+					{#if isStreaming}
+						{#if isInterrupting}
+							<SpinnerGapIcon size={16} class="animate-spin" />
+						{:else}
+							<StopCircleIcon size={16} />
+						{/if}
+					{:else if isSending}
 						<SpinnerGapIcon size={16} class="animate-spin" />
 					{:else}
-						<StopCircleIcon size={16} />
+						<ArrowUpIcon size={16} />
 					{/if}
-				{:else if isSending}
-					<SpinnerGapIcon size={16} class="animate-spin" />
-				{:else}
-					<ArrowUpIcon size={16} />
-				{/if}
-			</button>
+				</button>
+			</div>
 		</div>
 	</div>
 </div>
