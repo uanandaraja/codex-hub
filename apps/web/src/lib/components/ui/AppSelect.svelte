@@ -42,7 +42,7 @@
 <Select.Root type="single" {disabled} bind:value={getValue, setValue}>
 	<Select.Trigger
 		aria-label={ariaLabel}
-		class={`group inline-flex h-9 min-w-0 items-center gap-2 border border-line bg-surface-0 pl-2.5 pr-2 text-[12px] text-muted outline-none transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent focus-visible:border-accent disabled:cursor-not-allowed disabled:opacity-40 ${triggerClass}`}
+		class={`group inline-flex h-9 min-w-0 items-center gap-2 border border-line bg-surface-0 pl-2.5 pr-2 text-[12px] text-muted outline-none transition-[color,background-color] duration-150 hover:bg-surface-1 hover:text-accent focus-visible:text-accent disabled:cursor-not-allowed disabled:opacity-40 ${triggerClass}`}
 	>
 		<span class="min-w-0 flex-1 truncate text-left text-fg/92">
 			{selectedLabel || placeholder}

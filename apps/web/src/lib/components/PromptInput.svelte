@@ -34,8 +34,35 @@
 
 	type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
+	function formatSelectLabel(value: ReasoningEffort | 'build' | 'plan' | 'ask' | 'auto' | 'full'): string {
+		switch (value) {
+			case 'xhigh':
+				return 'Extra High';
+			case 'build':
+				return 'Build';
+			case 'plan':
+				return 'Plan';
+			case 'ask':
+				return 'Ask';
+			case 'auto':
+				return 'Auto';
+			case 'full':
+				return 'Full';
+			case 'none':
+				return 'None';
+			case 'minimal':
+				return 'Minimal';
+			case 'low':
+				return 'Low';
+			case 'medium':
+				return 'Medium';
+			case 'high':
+				return 'High';
+		}
+	}
+
 	let {
-		placeholder = 'message',
+		placeholder = 'Enter your message...',
 		onsubmit,
 		oninterrupt,
 		models = [],
@@ -117,22 +144,22 @@
 					value: model.model,
 					label: formatModelDisplayName(model.model)
 				}))
-			: [{ value: '', label: 'default' }]
+			: [{ value: '', label: 'Default' }]
 	);
 	const effortSelectOptions = $derived.by<AppSelectOption[]>(() =>
 		effortOptions.map((effort) => ({
 			value: effort,
-			label: effort
+			label: formatSelectLabel(effort)
 		}))
 	);
 	const modeOptions: AppSelectOption[] = [
-		{ value: 'build', label: 'build' },
-		{ value: 'plan', label: 'plan' }
+		{ value: 'build', label: formatSelectLabel('build') },
+		{ value: 'plan', label: formatSelectLabel('plan') }
 	];
 	const permissionOptions: AppSelectOption[] = [
-		{ value: 'ask', label: 'ask' },
-		{ value: 'auto', label: 'auto' },
-		{ value: 'full', label: 'full' }
+		{ value: 'ask', label: formatSelectLabel('ask') },
+		{ value: 'auto', label: formatSelectLabel('auto') },
+		{ value: 'full', label: formatSelectLabel('full') }
 	];
 	const supportedImageTypes = new Set([
 		'image/png',
@@ -1223,7 +1250,7 @@
 				<AppSelect
 					bind:value={selectedModel}
 					items={modelOptions}
-					placeholder="default"
+					placeholder="Default"
 					triggerClass={mobileModelClass}
 					ariaLabel="Model"
 				/>
@@ -1250,7 +1277,7 @@
 								<AppSelect
 									bind:value={selectedEffort}
 									items={effortSelectOptions}
-									placeholder="effort"
+									placeholder="Effort"
 									triggerClass={inlineSelectClass}
 									ariaLabel="Reasoning effort"
 								/>
@@ -1264,7 +1291,7 @@
 								<AppSelect
 									bind:value={selectedMode}
 									items={modeOptions}
-									placeholder="mode"
+									placeholder="Mode"
 									triggerClass={inlineSelectClass}
 									ariaLabel="Prompt mode"
 								/>
@@ -1278,7 +1305,7 @@
 								<AppSelect
 									bind:value={selectedPermissionPreset}
 									items={permissionOptions}
-									placeholder="permissions"
+									placeholder="Permissions"
 									triggerClass={inlineSelectClass}
 									ariaLabel="Permission preset"
 								/>
@@ -1311,7 +1338,7 @@
 			<AppSelect
 				bind:value={selectedModel}
 				items={modelOptions}
-				placeholder="default"
+				placeholder="Default"
 				triggerClass={`${controlTriggerClass} ${desktopModelClass}`}
 				ariaLabel="Model"
 			/>
@@ -1338,7 +1365,7 @@
 							<AppSelect
 								bind:value={selectedEffort}
 								items={effortSelectOptions}
-								placeholder="effort"
+								placeholder="Effort"
 								triggerClass={inlineSelectClass}
 								ariaLabel="Reasoning effort"
 							/>
@@ -1352,7 +1379,7 @@
 							<AppSelect
 								bind:value={selectedMode}
 								items={modeOptions}
-								placeholder="mode"
+								placeholder="Mode"
 								triggerClass={inlineSelectClass}
 								ariaLabel="Prompt mode"
 							/>
@@ -1366,7 +1393,7 @@
 							<AppSelect
 								bind:value={selectedPermissionPreset}
 								items={permissionOptions}
-								placeholder="permissions"
+								placeholder="Permissions"
 								triggerClass={inlineSelectClass}
 								ariaLabel="Permission preset"
 							/>

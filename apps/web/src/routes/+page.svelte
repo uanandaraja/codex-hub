@@ -174,7 +174,7 @@
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
 	const toolbarLinkClass =
-		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 font-mono text-[0.74rem] uppercase tracking-[0.16em] text-fg backdrop-blur-sm transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent min-[821px]:inline-flex';
+		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 text-[0.86rem] font-medium tracking-[0.02em] text-fg backdrop-blur-sm transition-[background,color] duration-150 hover:bg-surface-1 hover:text-accent min-[821px]:inline-flex';
 	const projectRowClass =
 		'group flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg transition-[background-color,border-color] duration-150';
 	const projectExpandButtonClass =
@@ -3746,7 +3746,7 @@
 					{models}
 					projectPath={selectedProjectPath}
 					branchLabel={selectedThreadBranch}
-					placeholder={showHomeScreen ? 'pick a project to start building' : 'enter your message'}
+					placeholder={showHomeScreen ? 'pick a project to start building' : 'Enter your message...'}
 					disabled={!selectedProjectPath}
 					isStreaming={selectedActiveTurnId !== null}
 					canInterrupt={canInterruptActiveTurn}
