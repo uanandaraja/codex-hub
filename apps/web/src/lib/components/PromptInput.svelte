@@ -142,9 +142,11 @@
 	const inlineSelectClass = 'w-full min-w-0';
 	const settingsSectionLabelClass =
 		'flex items-center gap-2 px-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-muted';
+	const mobileModelClass =
+		'w-full min-w-0 !border-0 !bg-transparent !pl-1.5 !pr-1 focus-visible:text-accent';
 	const desktopModelClass =
 		'min-[821px]:max-w-[9.4rem] min-[821px]:!border-0 min-[821px]:!bg-transparent min-[821px]:!pl-1.5 min-[821px]:!pr-1 min-[821px]:focus-visible:text-accent';
-	const desktopGhostButtonClass =
+	const ghostButtonClass =
 		'inline-flex h-9 w-9 items-center justify-center bg-transparent text-muted transition-colors duration-150 hover:text-accent focus-visible:text-accent disabled:cursor-not-allowed disabled:opacity-40';
 	const activeMentionQuery = $derived.by<MentionQueryMatch | null>(() =>
 		projectPath && !editorDisabled ? readActiveMentionQuery(value, selectionStart, selectionEnd) : null
@@ -1030,11 +1032,19 @@
 
 	<div class="-mt-px px-2 py-2">
 		<div
-			class="grid grid-cols-[auto_auto_minmax(0,1fr)_auto] items-center gap-2 min-[821px]:hidden"
+			class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-2 min-[821px]:hidden"
 		>
+			<AppSelect
+				bind:value={selectedModel}
+				items={modelOptions}
+				placeholder="default"
+				triggerClass={mobileModelClass}
+				ariaLabel="Model"
+			/>
+
 			<Popover.Root bind:open={advancedOpen}>
 				<Popover.Trigger
-					class="inline-flex h-9 w-9 items-center justify-center border border-line bg-surface-0 text-muted transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent"
+					class={ghostButtonClass}
 					aria-label="Advanced options"
 				>
 					<GearSixIcon size={16} />
@@ -1093,21 +1103,13 @@
 
 			<button
 				type="button"
-				class="inline-flex h-9 w-9 items-center justify-center border border-line bg-surface-0 text-muted transition-[border-color,color,background-color] duration-150 hover:border-accent hover:text-accent disabled:cursor-not-allowed disabled:opacity-40"
+				class={ghostButtonClass}
 				onclick={openFilePicker}
 				aria-label="Attach images"
 				disabled={attachmentDisabled}
 			>
 				<PaperclipIcon size={16} />
 			</button>
-
-			<AppSelect
-				bind:value={selectedModel}
-				items={modelOptions}
-				placeholder="default"
-				triggerClass={inlineSelectClass}
-				ariaLabel="Model"
-			/>
 
 			<button
 				type="button"
@@ -1148,7 +1150,7 @@
 
 				<Popover.Root bind:open={desktopAdvancedOpen}>
 					<Popover.Trigger
-						class={desktopGhostButtonClass}
+						class={ghostButtonClass}
 						aria-label="Advanced options"
 					>
 						<GearSixIcon size={16} />
@@ -1207,7 +1209,7 @@
 
 				<button
 					type="button"
-					class={desktopGhostButtonClass}
+					class={ghostButtonClass}
 					onclick={openFilePicker}
 					aria-label="Attach images"
 					disabled={attachmentDisabled}
