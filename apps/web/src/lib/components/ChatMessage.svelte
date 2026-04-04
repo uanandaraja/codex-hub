@@ -1,12 +1,13 @@
 <script lang="ts">
-	import gruvboxDarkMedium from '@shikijs/themes/gruvbox-dark-medium';
-	import { Streamdown } from 'svelte-streamdown';
-	import { streamdownTheme } from '$lib/streamdown/config';
+	import { onMount } from 'svelte';
+	import type { Component } from 'svelte';
 	import TurnStatusNote from '$lib/components/TurnStatusNote.svelte';
 
-	const streamdownShikiThemes = {
-		'gruvbox-dark-medium': gruvboxDarkMedium
-	} as const;
+	type AssistantMarkdownModule = typeof import('$lib/components/AssistantMarkdown.svelte');
+	type AssistantMarkdownProps = {
+		content: string;
+		streaming?: boolean;
+	};
 
 	let {
 		role,
@@ -28,7 +29,40 @@
 		contextLeftPercent?: number | null;
 	} = $props();
 
+	let assistantMarkdownModulePromise: Promise<AssistantMarkdownModule> | null = null;
+	let hasMounted = $state(false);
+	let assistantMarkdownComponent = $state<Component<AssistantMarkdownProps> | null>(null);
+	let assistantMarkdownLoadFailed = $state(false);
+
 	const isUser = $derived(role === 'user');
+
+	onMount(() => {
+		hasMounted = true;
+	});
+
+	$effect(() => {
+		if (
+			!hasMounted ||
+			role !== 'assistant' ||
+			!content ||
+			assistantMarkdownComponent ||
+			assistantMarkdownLoadFailed
+		) {
+			return;
+		}
+
+		void ensureAssistantMarkdownComponent();
+	});
+
+	async function ensureAssistantMarkdownComponent(): Promise<void> {
+		try {
+			assistantMarkdownModulePromise ??= import('$lib/components/AssistantMarkdown.svelte');
+			const module = await assistantMarkdownModulePromise;
+			assistantMarkdownComponent = module.default;
+		} catch {
+			assistantMarkdownLoadFailed = true;
+		}
+	}
 </script>
 
 {#if isUser}
@@ -54,17 +88,16 @@
 {:else}
 	<article class="mb-4 w-full min-w-0">
 		{#if content}
-			<div class="min-w-0 overflow-hidden">
-				<Streamdown
-					{content}
-					parseIncompleteMarkdown={streaming}
-					controls={{ code: false, mermaid: false, table: false }}
-					theme={streamdownTheme}
-					shikiTheme="gruvbox-dark-medium"
-					shikiThemes={streamdownShikiThemes}
-					class="min-w-0"
-				/>
-			</div>
+			{#if assistantMarkdownComponent}
+				{@const AssistantMarkdownComponent = assistantMarkdownComponent}
+				<AssistantMarkdownComponent {content} {streaming} />
+			{:else}
+				<div class="min-w-0 overflow-hidden">
+					<pre
+						class="m-0 whitespace-pre-wrap break-words font-sans [overflow-wrap:anywhere] text-[14px] leading-[1.7] text-fg"
+					>{content}</pre>
+				</div>
+			{/if}
 		{/if}
 
 		{#if showStatusNote}

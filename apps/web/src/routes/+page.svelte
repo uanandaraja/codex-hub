@@ -1,22 +1,12 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
-	import {
-		ArchiveIcon,
-		CaretDownIcon,
-		CaretRightIcon,
-		GitDiffIcon,
-		ListIcon,
-		PlusIcon,
-		PushPinIcon,
-		SpinnerGapIcon,
-		XIcon
-	} from 'phosphor-svelte';
+	import type { Component } from 'svelte';
+	import { CaretDownIcon, GitDiffIcon, ListIcon } from 'phosphor-svelte';
 	import vscodeLogo from '$lib/assets/vscode.svg';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
+	import ProjectSidebar from '$lib/components/ProjectSidebar.svelte';
 	import PromptInput from '$lib/components/PromptInput.svelte';
 	import ServerRequestPanel from '$lib/components/ServerRequestPanel.svelte';
-	import SidebarAccountStatus from '$lib/components/SidebarAccountStatus.svelte';
-	import ThreadDiffDrawer from '$lib/components/ThreadDiffDrawer.svelte';
 	import ToolActivity from '$lib/components/ToolActivity.svelte';
 	import { formatModelDisplayName } from '$lib/model-display-name';
 	import type {
@@ -61,6 +51,14 @@
 		fullHistory?: boolean;
 		includeUsage?: boolean;
 	};
+	type LoadProjectThreadsOptions = {
+		autoSelectThread?: boolean;
+		requestId?: number;
+	};
+	type EnsureThreadReadyOptions = {
+		requestId?: number;
+		updateSelection?: boolean;
+	};
 	type ThreadDiffPatch = {
 		id: string;
 		patch: string;
@@ -69,6 +67,11 @@
 		id: string;
 		title: string | null;
 		patches: ThreadDiffPatch[];
+	};
+	type ThreadDiffDrawerProps = {
+		sections?: ThreadDiffSection[];
+		editorHref?: string | null;
+		onclose?: () => void;
 	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
@@ -133,6 +136,7 @@
 	let selectedPermissionPreset = $state<PermissionPreset>('full');
 	let pendingAttachmentReleases = $state<Record<string, PromptAttachmentDraft[]>>({});
 	let creatingThread = $state(false);
+	let creatingThreadProjectPath = $state<string | null>(null);
 	let refreshingWorkspace = $state(false);
 	let resolvingRequestId = $state<number | null>(null);
 	let banner = $state<string | null>(initialBanner);
@@ -157,6 +161,7 @@
 	let desktopSidebarPreference: boolean | null = null;
 	let hasMounted = false;
 	let optimisticTurnCounter = 0;
+	let projectViewRequestId = 0;
 	let syncedPermissionThreadId: string | null | undefined = undefined;
 	let syncedComposerDraftKey: string | null = null;
 	let notifiedRequestIds = $state<Record<string, true>>({});
@@ -168,6 +173,9 @@
 	let suppressNextAutoScroll = false;
 	let showScrollToBottom = $state(false);
 	let diffDrawerOpen = $state(false);
+	let threadDiffDrawerComponent = $state<Component<ThreadDiffDrawerProps> | null>(null);
+	let loadingThreadDiffDrawer = $state(false);
+	let threadDiffDrawerComponentPromise: Promise<Component<ThreadDiffDrawerProps>> | null = null;
 	let liveTurnDiffsByThread = $state<Record<string, { turnId: string | null; diff: string }>>({});
 	const conversationBottomThresholdPx = 56;
 
@@ -175,22 +183,6 @@
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
 	const toolbarLinkClass =
 		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 text-[0.86rem] font-medium tracking-[0.02em] text-fg backdrop-blur-sm transition-[background,color] duration-150 hover:bg-surface-1 hover:text-accent min-[821px]:inline-flex';
-	const projectRowClass =
-		'group flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg transition-[background-color,border-color] duration-150';
-	const projectExpandButtonClass =
-		'inline-flex h-9 w-9 shrink-0 items-center justify-center border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg';
-	const projectSelectButtonClass =
-		'flex min-w-0 flex-1 items-center border-0 bg-transparent py-[0.95rem] pr-2 text-left text-fg';
-	const projectCreateButtonClass =
-		'mr-[0.55rem] inline-flex h-8 w-8 shrink-0 items-center justify-center border-0 bg-surface-1 text-fg transition-[opacity,color,border-color,background-color] duration-150 min-[821px]:pointer-events-none min-[821px]:border-transparent min-[821px]:bg-transparent min-[821px]:text-muted min-[821px]:opacity-0 min-[821px]:group-hover:pointer-events-auto min-[821px]:group-hover:opacity-100 min-[821px]:group-focus-within:pointer-events-auto min-[821px]:group-focus-within:opacity-100 min-[821px]:hover:border-line min-[821px]:hover:text-fg min-[821px]:focus-visible:border-line min-[821px]:focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
-	const projectPinButtonClass =
-		'pointer-events-none inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color,background-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg';
-	const chatRowClass =
-		'group relative flex w-full min-w-0 items-center gap-3 border-0 border-l-[3px] border-l-transparent bg-transparent px-[1.1rem] py-[0.82rem] pl-[1.85rem] text-left text-fg transition-[background-color,border-color,color] duration-150 hover:bg-surface-2/55';
-	const chatSelectButtonClass =
-		'flex min-w-0 flex-1 items-center gap-3 border-0 bg-transparent py-[0.05rem] pr-1 text-left text-fg';
-	const threadArchiveButtonClass =
-		'pointer-events-none inline-flex h-8 w-8 shrink-0 items-center justify-center border border-transparent bg-transparent text-muted opacity-0 transition-[opacity,color,border-color] duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 hover:border-line hover:text-fg focus-visible:border-line focus-visible:text-fg disabled:cursor-default disabled:opacity-40';
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
@@ -228,8 +220,6 @@
 	const permissionPresetConfig = $derived.by(() =>
 		resolvePermissionPreset(selectedPermissionPreset)
 	);
-
-	const projectThreads = $derived.by<CodexThread[]>(() => sortThreads(threads));
 
 	const currentThread = $derived.by<CodexThread | null>(() => {
 		if (!selectedThreadId) {
@@ -357,6 +347,18 @@
 	);
 
 	$effect(() => {
+		if (
+			!showDesktopDiffDrawer ||
+			threadDiffDrawerComponent ||
+			threadDiffDrawerComponentPromise
+		) {
+			return;
+		}
+
+		void ensureThreadDiffDrawerComponent();
+	});
+
+	$effect(() => {
 		const draftKey = selectedComposerDraftKey;
 		if (draftKey === syncedComposerDraftKey) {
 			return;
@@ -411,11 +413,15 @@
 			return;
 		}
 
-		if (selectedThreadId && projectThreads.some((thread) => thread.id === selectedThreadId)) {
+		if (!selectedThreadId) {
 			return;
 		}
 
-		selectedThreadId = projectThreads[0]?.id ?? null;
+		if (threads.some((thread) => thread.id === selectedThreadId)) {
+			return;
+		}
+
+		selectedThreadId = null;
 	});
 
 	$effect(() => {
@@ -515,9 +521,11 @@
 		}, 30_000);
 
 		if (selectedThreadId) {
-			void ensureThreadReady(selectedThreadId);
+			const requestId = beginProjectViewRequest();
+			void ensureThreadReady(selectedThreadId, { requestId });
 		} else if (selectedProjectPath) {
-			void loadProjectThreads(selectedProjectPath);
+			const requestId = beginProjectViewRequest();
+			void loadProjectThreads(selectedProjectPath, null, { requestId });
 		}
 
 		if (models.length === 0) {
@@ -639,17 +647,6 @@
 	});
 
 	$effect(() => {
-		if (!selectedProjectPath || projectThreadsByPath[selectedProjectPath] === threads) {
-			return;
-		}
-
-		projectThreadsByPath = {
-			...projectThreadsByPath,
-			[selectedProjectPath]: threads
-		};
-	});
-
-	$effect(() => {
 		if (!currentThread) {
 			return;
 		}
@@ -715,9 +712,15 @@
 				};
 			}
 
+			const requestId = projectViewRequestId;
 			await loadProjectThreads(
 				nextProjectPath,
-				nextProjectPath === selectedProjectPath ? selectedThreadId : null
+				nextProjectPath === selectedProjectPath ? selectedThreadId : null,
+				{
+					autoSelectThread:
+						nextProjectPath === selectedProjectPath ? selectedThreadId !== null : true,
+					requestId
+				}
 			);
 			banner = null;
 		} catch (error) {
@@ -808,26 +811,42 @@
 		return next;
 	}
 
-	function removeThreadFromVisibleProject(projectPath: string, threadId: string): CodexThread[] {
-		const sourceThreads =
-			projectPath === selectedProjectPath ? threads : (projectThreadsByPath[projectPath] ?? []);
-		const nextVisibleThreads = sortThreads(
-			sourceThreads.filter((thread) => thread.id !== threadId)
-		);
+	function beginProjectViewRequest(): number {
+		projectViewRequestId += 1;
+		return projectViewRequestId;
+	}
 
+	function isCurrentProjectViewRequest(requestId?: number): boolean {
+		return requestId === undefined || requestId === projectViewRequestId;
+	}
+
+	function currentProjectThreadList(projectPath: string): CodexThread[] {
 		if (projectPath === selectedProjectPath) {
-			threads = nextVisibleThreads;
+			return threads;
+		}
+
+		return projectThreadsByPath[projectPath] ?? [];
+	}
+
+	function setProjectThreadList(
+		projectPath: string,
+		threadList: CodexThread[],
+		options: { setVisible?: boolean } = {}
+	): CodexThread[] {
+		const nextThreads = sortThreads(threadList);
+		if (options.setVisible || projectPath === selectedProjectPath) {
+			threads = nextThreads;
 		}
 
 		const nextProjectThreadsByPath = { ...projectThreadsByPath };
-		if (nextVisibleThreads.length > 0) {
-			nextProjectThreadsByPath[projectPath] = nextVisibleThreads;
+		if (nextThreads.length > 0) {
+			nextProjectThreadsByPath[projectPath] = nextThreads;
 		} else {
 			delete nextProjectThreadsByPath[projectPath];
 		}
 		projectThreadsByPath = nextProjectThreadsByPath;
 
-		const nextProjects = syncProjectSummary(projects, projectPath, nextVisibleThreads);
+		const nextProjects = syncProjectSummary(projects, projectPath, nextThreads);
 		const projectStillVisible = nextProjects.some((project) => project.path === projectPath);
 		projects = nextProjects;
 
@@ -836,7 +855,53 @@
 			loadingProjectThreadsByPath = removeRecordEntry(loadingProjectThreadsByPath, projectPath);
 		}
 
-		return nextVisibleThreads;
+		return nextThreads;
+	}
+
+	function resolveSelectedThreadId(
+		threadList: CodexThread[],
+		preferredThreadId: string | null,
+		autoSelectThread: boolean
+	): string | null {
+		if (!autoSelectThread) {
+			return null;
+		}
+
+		if (preferredThreadId !== null) {
+			return threadList.some((thread) => thread.id === preferredThreadId)
+				? preferredThreadId
+				: null;
+		}
+
+		return threadList[0]?.id ?? null;
+	}
+
+	function showProject(
+		projectPath: string,
+		threadId: string | null,
+		threadList = currentProjectThreadList(projectPath)
+	): void {
+		selectedProjectPath = projectPath;
+		threads = threadList;
+		selectedThreadId = threadId;
+	}
+
+	function expandProject(projectPath: string): void {
+		if (projectPath in expandedProjectPaths) {
+			return;
+		}
+
+		expandedProjectPaths = {
+			...expandedProjectPaths,
+			[projectPath]: true
+		};
+	}
+
+	function removeThreadFromVisibleProject(projectPath: string, threadId: string): CodexThread[] {
+		return setProjectThreadList(
+			projectPath,
+			currentProjectThreadList(projectPath).filter((thread) => thread.id !== threadId)
+		);
 	}
 
 	function clearArchivedThreadLocalState(threadId: string): void {
@@ -871,8 +936,17 @@
 		}
 	}
 
-	async function ensureThreadReady(threadId: string): Promise<void> {
-		selectedThreadId = threadId;
+	async function ensureThreadReady(
+		threadId: string,
+		options: EnsureThreadReadyOptions = {}
+	): Promise<void> {
+		const { requestId, updateSelection = true } = options;
+		if (!isCurrentProjectViewRequest(requestId)) {
+			return;
+		}
+		if (updateSelection) {
+			selectedThreadId = threadId;
+		}
 		pruneInactiveThreadEventSubscriptions();
 		try {
 			const fetchTasks: Promise<void>[] = [];
@@ -886,9 +960,15 @@
 			if (fetchTasks.length > 0) {
 				await Promise.all(fetchTasks);
 			}
+			if (!isCurrentProjectViewRequest(requestId)) {
+				return;
+			}
 			void refreshThreadUsage(threadId);
 			banner = null;
 		} catch (error) {
+			if (!isCurrentProjectViewRequest(requestId)) {
+				return;
+			}
 			banner = error instanceof Error ? error.message : 'Failed to open chat.';
 		}
 	}
@@ -950,21 +1030,24 @@
 
 	async function loadProjectThreads(
 		projectPath: string,
-		preferredThreadId: string | null = null
+		preferredThreadId: string | null = null,
+		options: LoadProjectThreadsOptions = {}
 	): Promise<CodexThread[]> {
 		const nextThreads = await fetchProjectThreads(projectPath);
-		threads = nextThreads;
-		projectThreadsByPath = {
-			...projectThreadsByPath,
-			[projectPath]: nextThreads
-		};
+		if (!isCurrentProjectViewRequest(options.requestId)) {
+			return nextThreads;
+		}
+
 		selectedProjectPath = projectPath;
-		selectedThreadId =
-			preferredThreadId && nextThreads.some((thread) => thread.id === preferredThreadId)
-				? preferredThreadId
-				: (nextThreads[0]?.id ?? null);
-		projects = syncProjectSummary(projects, projectPath, nextThreads);
-		return nextThreads;
+		const nextVisibleThreads = setProjectThreadList(projectPath, nextThreads, {
+			setVisible: true
+		});
+		selectedThreadId = resolveSelectedThreadId(
+			nextVisibleThreads,
+			preferredThreadId,
+			options.autoSelectThread ?? true
+		);
+		return nextVisibleThreads;
 	}
 
 	async function refreshModels(): Promise<void> {
@@ -987,32 +1070,32 @@
 	}
 
 	async function selectProject(projectPath: string): Promise<void> {
-		if (projectPath === selectedProjectPath && projectThreads.length > 0) {
-			if (!selectedThreadId && projectThreads[0]) {
-				await ensureThreadReady(projectThreads[0].id);
+		if (projectPath === selectedProjectPath && threads.length > 0) {
+			if (!selectedThreadId && threads[0]) {
+				await ensureThreadReady(threads[0].id);
 			}
 			return;
 		}
 
-		if (!(projectPath in expandedProjectPaths)) {
-			expandedProjectPaths = {
-				...expandedProjectPaths,
-				[projectPath]: true
-			};
-		}
-
-		selectedProjectPath = projectPath;
-		selectedThreadId = null;
-		threads = [];
+		const requestId = beginProjectViewRequest();
+		expandProject(projectPath);
+		const cachedThreads = currentProjectThreadList(projectPath);
+		showProject(projectPath, cachedThreads[0]?.id ?? null, cachedThreads);
 
 		try {
-			const nextThreads = await loadProjectThreads(projectPath);
+			const nextThreads = await loadProjectThreads(projectPath, null, { requestId });
+			if (!isCurrentProjectViewRequest(requestId)) {
+				return;
+			}
 			if (nextThreads[0]) {
-				await ensureThreadReady(nextThreads[0].id);
+				await ensureThreadReady(nextThreads[0].id, { requestId });
 			} else {
 				banner = null;
 			}
 		} catch (error) {
+			if (!isCurrentProjectViewRequest(requestId)) {
+				return;
+			}
 			banner = error instanceof Error ? error.message : 'Failed to open project.';
 		}
 	}
@@ -1022,11 +1105,8 @@
 		await selectProject(projectPath);
 	}
 
-	function toggleProjectPinned(event: MouseEvent, projectPath: string): void {
-		event.preventDefault();
-		event.stopPropagation();
-
-		if (projectIsPinned(projectPath)) {
+	function toggleProjectPinned(projectPath: string): void {
+		if (pinnedProjectPaths[projectPath]) {
 			pinnedProjectPaths = removeRecordEntry(pinnedProjectPaths, projectPath);
 		} else {
 			pinnedProjectPaths = {
@@ -1046,10 +1126,7 @@
 			return;
 		}
 
-		expandedProjectPaths = {
-			...expandedProjectPaths,
-			[projectPath]: true
-		};
+		expandProject(projectPath);
 
 		if (projectPath === selectedProjectPath || projectPath in projectThreadsByPath) {
 			return;
@@ -1061,10 +1138,7 @@
 		};
 
 		try {
-			projectThreadsByPath = {
-				...projectThreadsByPath,
-				[projectPath]: await fetchProjectThreads(projectPath)
-			};
+			setProjectThreadList(projectPath, await fetchProjectThreads(projectPath));
 			banner = null;
 		} catch (error) {
 			const nextExpandedProjects = { ...expandedProjectPaths };
@@ -1082,25 +1156,35 @@
 
 	async function handleSidebarThreadSelect(projectPath: string, threadId: string): Promise<void> {
 		collapseSidebarOnMobile();
-		if (projectPath !== selectedProjectPath) {
-			if (!(projectPath in expandedProjectPaths)) {
-				expandedProjectPaths = {
-					...expandedProjectPaths,
-					[projectPath]: true
-				};
+		const wasSelectedProject = projectPath === selectedProjectPath;
+		const requestId = beginProjectViewRequest();
+		const cachedThreads = currentProjectThreadList(projectPath);
+		expandProject(projectPath);
+		showProject(
+			projectPath,
+			cachedThreads.some((thread) => thread.id === threadId) ? threadId : null,
+			cachedThreads
+		);
+		if (!wasSelectedProject) {
+			try {
+				await loadProjectThreads(projectPath, threadId, { requestId });
+			} catch (error) {
+				if (!isCurrentProjectViewRequest(requestId)) {
+					return;
+				}
+				banner = error instanceof Error ? error.message : 'Failed to open project.';
+				return;
 			}
-			await loadProjectThreads(projectPath, threadId);
 		}
-		await ensureThreadReady(threadId);
+		await ensureThreadReady(threadId, { requestId, updateSelection: false });
 	}
 
-	async function handleArchiveThread(
-		event: MouseEvent,
-		projectPath: string,
-		thread: CodexThread
-	): Promise<void> {
-		event.preventDefault();
-		event.stopPropagation();
+	async function handleArchiveThread(projectPath: string, threadId: string): Promise<void> {
+		const thread =
+			currentProjectThreadList(projectPath).find((entry) => entry.id === threadId) ?? null;
+		if (!thread) {
+			return;
+		}
 
 		if (threadIsRunning(thread) || archivingThreadIds[thread.id]) {
 			return;
@@ -1153,6 +1237,7 @@
 		}
 
 		creatingThread = true;
+		creatingThreadProjectPath = projectPath;
 		try {
 			const result = await api<ThreadStartResponse>('/api/threads', {
 				method: 'POST',
@@ -1167,10 +1252,14 @@
 				})
 			});
 
-			threads = sortThreads([
+			const existingProjectThreads = currentProjectThreadList(projectPath);
+			beginProjectViewRequest();
+			selectedProjectPath = projectPath;
+			const nextProjectThreads = [
 				compactThreadSummary(result.thread),
-				...threads.filter((thread) => thread.id !== result.thread.id)
-			]);
+				...existingProjectThreads.filter((thread) => thread.id !== result.thread.id)
+			];
+			setProjectThreadList(projectPath, nextProjectThreads, { setVisible: true });
 			threadDetails = {
 				...threadDetails,
 				[result.thread.id]: result.thread
@@ -1181,15 +1270,8 @@
 					[result.thread.id]: selectedPermissionPreset
 				};
 			}
-			selectedProjectPath = projectPath;
 			selectedThreadId = result.thread.id;
-			if (!(projectPath in expandedProjectPaths)) {
-				expandedProjectPaths = {
-					...expandedProjectPaths,
-					[projectPath]: true
-				};
-			}
-			projects = insertProjectSummary(projects, projectPath, result.thread);
+			expandProject(projectPath);
 			pendingRequestsByThread = {
 				...pendingRequestsByThread,
 				[result.thread.id]: []
@@ -1212,6 +1294,7 @@
 			return null;
 		} finally {
 			creatingThread = false;
+			creatingThreadProjectPath = null;
 		}
 	}
 
@@ -1361,7 +1444,11 @@
 		}
 
 		try {
-			await loadProjectThreads(selectedProjectPath, selectedThreadId);
+			const requestId = projectViewRequestId;
+			await loadProjectThreads(selectedProjectPath, selectedThreadId, {
+				autoSelectThread: selectedThreadId !== null,
+				requestId
+			});
 		} catch (error) {
 			banner = error instanceof Error ? error.message : 'Failed to refresh chats.';
 		}
@@ -1553,29 +1640,29 @@
 		);
 	}
 
-	function projectChatCount(projectPath: string): number {
-		return projects.find((project) => project.path === projectPath)?.threadCount ?? 0;
-	}
+	const sidebarProjects = $derived.by(() =>
+		projects.map((project) => {
+			const isSelected = project.path === selectedProjectPath;
+			const projectThreads = isSelected ? threads : (projectThreadsByPath[project.path] ?? []);
 
-	function projectIsPinned(projectPath: string): boolean {
-		return Boolean(pinnedProjectPaths[projectPath]);
-	}
-
-	function projectIsExpanded(projectPath: string): boolean {
-		return Boolean(expandedProjectPaths[projectPath]);
-	}
-
-	function projectThreadsLoading(projectPath: string): boolean {
-		return Boolean(loadingProjectThreadsByPath[projectPath]);
-	}
-
-	function sidebarThreadsForProject(projectPath: string): CodexThread[] {
-		if (projectPath === selectedProjectPath) {
-			return projectThreads;
-		}
-
-		return projectThreadsByPath[projectPath] ?? [];
-	}
+			return {
+				path: project.path,
+				name: project.name,
+				isSelected,
+				isExpanded: Boolean(expandedProjectPaths[project.path]),
+				isPinned: Boolean(pinnedProjectPaths[project.path]),
+				isCreatingThread: creatingThread && creatingThreadProjectPath === project.path,
+				isLoading: Boolean(loadingProjectThreadsByPath[project.path]),
+				threads: projectThreads.map((thread) => ({
+					id: thread.id,
+					label: chatLabel(thread),
+					isSelected: thread.id === selectedThreadId,
+					isRunning: threadIsRunning(thread),
+					isArchiving: Boolean(archivingThreadIds[thread.id])
+				}))
+			};
+		})
+	);
 
 	function projectNameFromPath(path: string): string {
 		const segments = path.split('/').filter(Boolean);
@@ -2401,32 +2488,14 @@
 			return sortProjects(projectList.filter((project) => project.path !== projectPath));
 		}
 
-		return sortProjects(
-			projectList.map((project) =>
-				project.path === projectPath
-					? {
-							...project,
-							threadCount: threadList.length,
-							updatedAt: threadList[0].updatedAt
-						}
-					: project
-			)
-		);
-	}
-
-	function insertProjectSummary(
-		projectList: ProjectSummary[],
-		projectPath: string,
-		thread: CodexThread
-	): ProjectSummary[] {
-		const existing = projectList.find((project) => project.path === projectPath);
-		if (!existing) {
+		const existingProject = projectList.find((project) => project.path === projectPath);
+		if (!existingProject) {
 			return sortProjects([
 				{
 					name: projectNameFromPath(projectPath),
 					path: projectPath,
-					threadCount: 1,
-					updatedAt: thread.updatedAt
+					threadCount: threadList.length,
+					updatedAt: threadList[0]?.updatedAt ?? Date.now()
 				},
 				...projectList
 			]);
@@ -2437,8 +2506,8 @@
 				project.path === projectPath
 					? {
 							...project,
-							threadCount: project.threadCount + 1,
-							updatedAt: Math.max(project.updatedAt, thread.updatedAt)
+							threadCount: threadList.length,
+							updatedAt: threadList[0].updatedAt
 						}
 					: project
 			)
@@ -2683,7 +2752,8 @@
 			...threadDetails,
 			[threadId]: optimisticThread
 		};
-		threads = sortThreads(
+		setProjectThreadList(
+			selectedProjectPath ?? baseThread.cwd,
 			threads.map((thread) =>
 				thread.id === threadId
 					? {
@@ -2692,7 +2762,8 @@
 							updatedAt: optimisticUpdatedAt
 						}
 					: thread
-			)
+			),
+			{ setVisible: true }
 		);
 
 		return { previousDetailedThread, previousThreads };
@@ -2706,7 +2777,11 @@
 			return;
 		}
 
-		threads = state.previousThreads;
+		if (selectedProjectPath) {
+			setProjectThreadList(selectedProjectPath, state.previousThreads, { setVisible: true });
+		} else {
+			threads = state.previousThreads;
+		}
 
 		if (state.previousDetailedThread) {
 			threadDetails = {
@@ -3099,6 +3174,21 @@
 		persistDesktopSidebarPreference(next);
 	}
 
+	async function ensureThreadDiffDrawerComponent(): Promise<void> {
+		loadingThreadDiffDrawer = true;
+		threadDiffDrawerComponentPromise ??= import('$lib/components/ThreadDiffDrawer.svelte').then(
+			(module) => module.default
+		);
+
+		try {
+			threadDiffDrawerComponent = await threadDiffDrawerComponentPromise;
+		} catch {
+			banner = 'Failed to load the thread diff drawer.';
+		} finally {
+			loadingThreadDiffDrawer = false;
+		}
+	}
+
 	function closeSidebar(): void {
 		sidebarOpen = false;
 		persistDesktopSidebarPreference(false);
@@ -3111,6 +3201,7 @@
 	}
 
 	function goHome(): void {
+		beginProjectViewRequest();
 		selectedProjectPath = null;
 		selectedThreadId = null;
 		threads = [];
@@ -3282,7 +3373,9 @@
 		}
 
 		const currentPath = toPatchPath(change.path, projectRoot);
-		const movedPath = change.kind.move_path ? toPatchPath(change.kind.move_path, projectRoot) : null;
+		const movedPath = change.kind.move_path
+			? toPatchPath(change.kind.move_path, projectRoot)
+			: null;
 		const diffBody = rawDiff.endsWith('\n') ? rawDiff : `${rawDiff}\n`;
 
 		switch (change.kind.type) {
@@ -3339,188 +3432,23 @@
 </svelte:head>
 
 <div class="relative h-dvh max-h-dvh overflow-hidden bg-surface-0">
-	{#if sidebarOpen}
-		<button
-			type="button"
-			class="fixed inset-0 z-30 bg-black/60 min-[821px]:hidden"
-			onclick={closeSidebar}
-			aria-label="Close sidebar"
-		></button>
-	{/if}
-
-	<aside
-		class={`fixed inset-y-0 left-0 z-40 flex w-[19rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden rounded-none border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}
-	>
-		<div
-			class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 rounded-none border-b border-line px-[1.1rem] py-[1.05rem]"
-		>
-			<button
-				type="button"
-				class="flex min-w-0 flex-1 items-center border-0 bg-transparent p-0 text-left"
-				onclick={goHome}
-				aria-label="Go to home"
-			>
-				<h1 class="truncate text-[0.95rem] font-medium uppercase tracking-[0.12em] text-muted">
-					Codex Hub
-				</h1>
-			</button>
-
-			<div class="flex shrink-0 items-center gap-2">
-				<button
-					class={`${iconButtonClass} rounded-none border-0`}
-					type="button"
-					onclick={closeSidebar}
-					aria-label="Hide sidebar"
-				>
-					<XIcon size={18} />
-				</button>
-			</div>
-		</div>
-
-		<div class="min-h-0 flex-1 overflow-x-hidden overflow-y-auto pb-[1.1rem]">
-			{#if banner}
-				<div
-					class="mx-[1.1rem] mt-4 border border-notice-soft-line bg-notice-soft-fill p-[0.85rem] text-[0.82rem] text-notice"
-				>
-					{banner}
-				</div>
-			{/if}
-
-			<div class="mt-4">
-				{#each projects as project, index (project.path)}
-					<section class:border-t={index > 0} class:border-line={index > 0}>
-						<div
-							class={projectRowClass}
-							class:border-l-accent={project.path === selectedProjectPath}
-							class:bg-surface-2={project.path === selectedProjectPath}
-						>
-							<button
-								type="button"
-								class={projectExpandButtonClass}
-								onclick={() => void toggleProjectExpanded(project.path)}
-								aria-label={projectIsExpanded(project.path) ? 'Collapse project' : 'Expand project'}
-								aria-expanded={projectIsExpanded(project.path)}
-							>
-								{#if projectIsExpanded(project.path)}
-									<CaretDownIcon size={15} />
-								{:else}
-									<CaretRightIcon size={15} />
-								{/if}
-							</button>
-							<button
-								type="button"
-								class={projectSelectButtonClass}
-								onclick={() => void handleProjectSelect(project.path)}
-							>
-								<span class="min-w-0 flex-1 truncate font-sans text-[0.85rem]">{project.name}</span>
-							</button>
-							<button
-								type="button"
-								class={projectPinButtonClass}
-								class:pointer-events-auto={projectIsPinned(project.path)}
-								class:opacity-100={projectIsPinned(project.path)}
-								class:border-line={projectIsPinned(project.path)}
-								class:bg-surface-1={projectIsPinned(project.path)}
-								class:text-accent={projectIsPinned(project.path)}
-								onclick={(event) => toggleProjectPinned(event, project.path)}
-								aria-label={projectIsPinned(project.path) ? 'Unpin project' : 'Pin project'}
-								title={projectIsPinned(project.path) ? 'Unpin project' : 'Pin project'}
-							>
-								<PushPinIcon
-									size={14}
-									weight={projectIsPinned(project.path) ? 'fill' : 'regular'}
-								/>
-							</button>
-							<button
-								type="button"
-								class={projectCreateButtonClass}
-								class:pointer-events-auto={project.path === selectedProjectPath}
-								class:opacity-100={project.path === selectedProjectPath}
-								class:border-line={project.path === selectedProjectPath}
-								class:bg-surface-1={project.path === selectedProjectPath}
-								class:text-fg={project.path === selectedProjectPath}
-								onclick={() => void handleCreateThread(project.path)}
-								disabled={creatingThread}
-								aria-label={`New chat in ${project.name}`}
-								title={`New chat in ${project.name}`}
-							>
-								<PlusIcon size={14} />
-							</button>
-						</div>
-
-						{#if projectIsExpanded(project.path)}
-							<div class="pb-2">
-								{#if projectThreadsLoading(project.path)}
-									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
-										loading chats...
-									</div>
-								{:else if sidebarThreadsForProject(project.path).length === 0}
-									<div class="px-[1.1rem] py-3 pl-[1.85rem] font-mono text-[0.78rem] text-muted">
-										no chats yet
-									</div>
-								{:else}
-									{#each sidebarThreadsForProject(project.path) as thread (thread.id)}
-										<div
-											class={chatRowClass}
-											class:border-l-accent={thread.id === selectedThreadId}
-											class:bg-surface-2={thread.id === selectedThreadId}
-											class:text-accent={thread.id === selectedThreadId}
-										>
-											<button
-												type="button"
-												class={chatSelectButtonClass}
-												onclick={() => void handleSidebarThreadSelect(project.path, thread.id)}
-												aria-current={thread.id === selectedThreadId ? 'page' : undefined}
-											>
-												<span
-													class={`h-2.5 w-2.5 shrink-0 rounded-full border transition-[transform,background-color,border-color,opacity] duration-150 ${
-														thread.id === selectedThreadId
-															? 'border-accent bg-accent opacity-100'
-															: 'border-line bg-transparent opacity-55 group-hover:opacity-80'
-													}`}
-													aria-hidden="true"
-												></span>
-												<span class="flex min-w-0 flex-1 items-center gap-2 text-[0.79rem]">
-													<span class="min-w-0 flex-1 truncate">{chatLabel(thread)}</span>
-													{#if threadIsRunning(thread)}
-														<SpinnerGapIcon size={13} class="shrink-0 animate-spin text-accent" />
-													{/if}
-												</span>
-											</button>
-											<button
-												type="button"
-												class={threadArchiveButtonClass}
-												disabled={Boolean(archivingThreadIds[thread.id]) || threadIsRunning(thread)}
-												onclick={(event) => void handleArchiveThread(event, project.path, thread)}
-												aria-label={`Archive ${chatLabel(thread)}`}
-												title={threadIsRunning(thread)
-													? 'Active chats cannot be archived'
-													: 'Archive chat'}
-											>
-												<ArchiveIcon size={14} />
-											</button>
-										</div>
-									{/each}
-								{/if}
-							</div>
-						{/if}
-					</section>
-				{:else}
-					<div
-						class="grid gap-[0.35rem] border-t border-line px-[1.1rem] py-4 font-mono text-[0.78rem] text-muted"
-					>
-						<span class="font-semibold text-fg">no projects yet</span>
-						<span>projects appear once they have codex chats</span>
-					</div>
-				{/each}
-			</div>
-		</div>
-
-		<SidebarAccountStatus {status} />
-	</aside>
+	<ProjectSidebar
+		open={sidebarOpen}
+		{banner}
+		{status}
+		{creatingThread}
+		projects={sidebarProjects}
+		onclose={closeSidebar}
+		onhome={goHome}
+		onprojecttoggleexpand={toggleProjectExpanded}
+		onprojecttogglepin={toggleProjectPinned}
+		onthreadcreate={handleCreateThread}
+		onthreadselect={handleSidebarThreadSelect}
+		onthreadarchive={handleArchiveThread}
+	/>
 
 	<main
-		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[19rem]' : ''} ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
+		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''} ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
 	>
 		<div
 			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
@@ -3571,13 +3499,27 @@
 		</div>
 
 		{#if showDesktopDiffDrawer}
-			<ThreadDiffDrawer
-				sections={selectedThreadDiffSections}
-				editorHref={selectedEditorHref}
-				onclose={() => {
-					diffDrawerOpen = false;
-				}}
-			/>
+			{#if threadDiffDrawerComponent}
+				{@const ThreadDiffDrawerComponent = threadDiffDrawerComponent}
+				<ThreadDiffDrawerComponent
+					sections={selectedThreadDiffSections}
+					editorHref={selectedEditorHref}
+					onclose={() => {
+						diffDrawerOpen = false;
+					}}
+				/>
+			{:else}
+				<aside
+					class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					aria-label="Thread diff"
+				>
+					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
+						<p class="text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
+							{loadingThreadDiffDrawer ? 'Loading diff...' : 'Diff unavailable'}
+						</p>
+					</div>
+				</aside>
+			{/if}
 		{/if}
 
 		<section
@@ -3589,22 +3531,30 @@
 				class={`mx-auto flex min-h-full w-full flex-col ${showHomeScreen ? 'max-w-[720px]' : 'max-w-[680px]'}`}
 			>
 				{#if showHomeScreen}
-					<div class="flex flex-1 flex-col items-center justify-center px-3 py-10 text-center min-[821px]:py-16">
+					<div
+						class="flex flex-1 flex-col items-center justify-center px-3 py-10 text-center min-[821px]:py-16"
+					>
 						<h2 class="text-[clamp(1.4rem,4vw,2rem)] font-medium tracking-[-0.04em] text-fg">
 							Codex Hub
 						</h2>
 						<div class="mt-10 w-full rounded-none border-t border-line">
 							{#each homeProjects as project (project.path)}
-								<div class="group flex items-center gap-3 rounded-none border-b border-line py-4 text-left transition-colors duration-150 hover:bg-surface-1/35">
+								<div
+									class="group flex items-center gap-3 rounded-none border-b border-line py-4 text-left transition-colors duration-150 hover:bg-surface-1/35"
+								>
 									<button
 										type="button"
 										class="min-w-0 flex-1 cursor-pointer rounded-none border-0 bg-transparent p-0 text-left"
 										onclick={() => void handleProjectSelect(project.path)}
 									>
-										<p class="truncate text-[0.95rem] font-normal tracking-[-0.03em] text-fg transition-colors duration-150 group-hover:text-accent">
+										<p
+											class="truncate text-[0.95rem] font-normal tracking-[-0.03em] text-fg transition-colors duration-150 group-hover:text-accent"
+										>
 											{project.name}
 										</p>
-										<p class="truncate font-mono text-[0.72rem] text-muted transition-colors duration-150 group-hover:text-fg/72">
+										<p
+											class="truncate font-mono text-[0.72rem] text-muted transition-colors duration-150 group-hover:text-fg/72"
+										>
 											{shortPath(project.path)}
 										</p>
 									</button>
@@ -3708,19 +3658,19 @@
 				class="theme-bg-footer-fade pointer-events-none absolute inset-x-0 top-0 h-20 backdrop-blur-[10px]"
 			></div>
 			<div class="relative mx-auto w-full max-w-[680px]">
-					{#if showScrollToBottom}
-						<div class="pointer-events-none absolute inset-x-0 bottom-full mb-3 flex justify-center">
-							<button
-								type="button"
-								class="pointer-events-auto inline-flex items-center gap-1.5 border border-line bg-surface-1/88 px-2.5 py-1.5 text-[11px] text-fg backdrop-blur-sm transition-[background-color,color] duration-150 hover:bg-surface-1 hover:text-accent"
-								onclick={() => void scrollConversationToBottom('smooth')}
-								aria-label="Scroll to bottom"
-							>
-								<CaretDownIcon size={12} />
-								<span class="text-xs">Scroll to bottom</span>
-							</button>
-						</div>
-					{/if}
+				{#if showScrollToBottom}
+					<div class="pointer-events-none absolute inset-x-0 bottom-full mb-3 flex justify-center">
+						<button
+							type="button"
+							class="pointer-events-auto inline-flex items-center gap-1.5 border border-line bg-surface-1/88 px-2.5 py-1.5 text-[11px] text-fg backdrop-blur-sm transition-[background-color,color] duration-150 hover:bg-surface-1 hover:text-accent"
+							onclick={() => void scrollConversationToBottom('smooth')}
+							aria-label="Scroll to bottom"
+						>
+							<CaretDownIcon size={12} />
+							<span class="text-xs">Scroll to bottom</span>
+						</button>
+					</div>
+				{/if}
 
 				{#if activeFooterRequests.length > 0}
 					<div class="mb-3 grid gap-3">
@@ -3746,7 +3696,9 @@
 					{models}
 					projectPath={selectedProjectPath}
 					branchLabel={selectedThreadBranch}
-					placeholder={showHomeScreen ? 'pick a project to start building' : 'Enter your message...'}
+					placeholder={showHomeScreen
+						? 'pick a project to start building'
+						: 'Enter your message...'}
 					disabled={!selectedProjectPath}
 					isStreaming={selectedActiveTurnId !== null}
 					canInterrupt={canInterruptActiveTurn}
