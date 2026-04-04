@@ -82,11 +82,6 @@
 	.thread-row--selected {
 		background: var(--color-surface-2);
 	}
-
-	.thread-row--selected .thread-archive-button {
-		pointer-events: auto;
-		opacity: 1;
-	}
 </style>
 
 {#if open}

@@ -136,7 +136,7 @@
 </script>
 
 <section class="rounded-none border-t border-line px-[1.1rem] py-[1.05rem]">
-	<div class="rounded-none border border-line bg-surface-0">
+	<div class="overflow-hidden rounded-[0.9rem] border border-line bg-surface-0">
 		<button
 			type="button"
 			class="w-full text-left transition-[border-color,background-color] duration-150 hover:bg-accent-soft-hover"
@@ -157,7 +157,7 @@
 						</p>
 					</div>
 
-					<span class="inline-flex h-9 w-9 shrink-0 items-center justify-center border border-line text-muted">
+					<span class="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-[0.75rem] border border-line text-muted">
 						{#if expanded}
 							<EyeSlashIcon size={16} />
 						{:else}
