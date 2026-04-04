@@ -1,9 +1,14 @@
 <script lang="ts">
+	import { browser, dev } from '$app/environment';
 	import { onMount } from 'svelte';
 	import '../app.css';
 	import favicon from '$lib/assets/favicon.svg';
 
 	let { children } = $props();
+
+	if (browser && dev) {
+		void import('@uanandaraja/sveltegrab/auto');
+	}
 
 	onMount(() => {
 		const themeColorMeta = document.querySelector('meta[name="theme-color"]');
