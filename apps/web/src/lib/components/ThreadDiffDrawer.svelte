@@ -39,8 +39,10 @@
 		editorHref?: string | null;
 		onclose?: () => void;
 	} = $props();
+
 	let defaultFilesCollapsed = $state(true);
 	let fileCollapseOverrides = $state<Record<string, boolean>>({});
+
 	const parsedPatchCache = new Map<
 		string,
 		{

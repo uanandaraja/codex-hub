@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount, tick, untrack } from 'svelte';
 	import type { Component } from 'svelte';
-	import { CaretDownIcon, GitDiffIcon, ListIcon } from 'phosphor-svelte';
+	import { CaretDownIcon, FileCodeIcon, GitDiffIcon, ListIcon } from 'phosphor-svelte';
 	import vscodeLogo from '$lib/assets/vscode.svg';
 	import ChatMessage from '$lib/components/ChatMessage.svelte';
 	import ProjectSidebar from '$lib/components/ProjectSidebar.svelte';
@@ -73,6 +73,11 @@
 		editorHref?: string | null;
 		onclose?: () => void;
 	};
+type ThreadFileDrawerProps = {
+	projectPath?: string | null;
+	editorHref?: string | null;
+	onclose?: () => void;
+};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
 	const PINNED_PROJECTS_KEY = 'codex-hub.pinned-projects';
@@ -176,6 +181,10 @@
 	let threadDiffDrawerComponent = $state<Component<ThreadDiffDrawerProps> | null>(null);
 	let loadingThreadDiffDrawer = $state(false);
 	let threadDiffDrawerComponentPromise: Promise<Component<ThreadDiffDrawerProps>> | null = null;
+	let fileDrawerOpen = $state(false);
+	let threadFileDrawerComponent = $state<Component<ThreadFileDrawerProps> | null>(null);
+	let loadingThreadFileDrawer = $state(false);
+	let threadFileDrawerComponentPromise: Promise<Component<ThreadFileDrawerProps>> | null = null;
 	let liveTurnDiffsByThread = $state<Record<string, { turnId: string | null; diff: string }>>({});
 	const conversationBottomThresholdPx = 56;
 
@@ -327,6 +336,8 @@
 		return sections;
 	});
 	const showDesktopDiffDrawer = $derived.by(() => diffDrawerOpen && selectedThreadId !== null);
+	const showDesktopFileDrawer = $derived.by(() => fileDrawerOpen && selectedProjectPath !== null);
+	const showDesktopRightDrawer = $derived.by(() => showDesktopDiffDrawer || showDesktopFileDrawer);
 	const selectedComposerDraftKey = $derived.by(() =>
 		selectedThreadId
 			? `thread:${selectedThreadId}`
@@ -356,6 +367,18 @@
 		}
 
 		void ensureThreadDiffDrawerComponent();
+	});
+
+	$effect(() => {
+		if (
+			!showDesktopFileDrawer ||
+			threadFileDrawerComponent ||
+			threadFileDrawerComponentPromise
+		) {
+			return;
+		}
+
+		void ensureThreadFileDrawerComponent();
 	});
 
 	$effect(() => {
@@ -439,6 +462,14 @@
 		}
 
 		diffDrawerOpen = false;
+	});
+
+	$effect(() => {
+		if (selectedProjectPath) {
+			return;
+		}
+
+		fileDrawerOpen = false;
 	});
 
 	$effect(() => {
@@ -3189,6 +3220,21 @@
 		}
 	}
 
+	async function ensureThreadFileDrawerComponent(): Promise<void> {
+		loadingThreadFileDrawer = true;
+		threadFileDrawerComponentPromise ??= import('$lib/components/ThreadFileDrawer.svelte').then(
+			(module) => module.default
+		);
+
+		try {
+			threadFileDrawerComponent = await threadFileDrawerComponentPromise;
+		} catch {
+			banner = 'Failed to load the thread file drawer.';
+		} finally {
+			loadingThreadFileDrawer = false;
+		}
+	}
+
 	function closeSidebar(): void {
 		sidebarOpen = false;
 		persistDesktopSidebarPreference(false);
@@ -3448,10 +3494,10 @@
 	/>
 
 	<main
-		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''} ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
+		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''} ${showDesktopRightDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
 	>
 		<div
-			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${showDesktopDiffDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
+			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${showDesktopRightDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
 		>
 			<div class="flex w-full items-center justify-between gap-3">
 				<div class="min-w-0">
@@ -3467,12 +3513,15 @@
 				</div>
 
 				<div class="flex items-center justify-end gap-2">
-					{#if !showDesktopDiffDrawer}
+					{#if !showDesktopRightDrawer}
 						{#if selectedThreadId}
 							<button
 								type="button"
 								class={`${toolbarLinkClass} ${showDesktopDiffDrawer ? 'border-accent text-accent' : ''}`}
-								onclick={() => (diffDrawerOpen = !diffDrawerOpen)}
+								onclick={() => {
+									fileDrawerOpen = false;
+									diffDrawerOpen = !diffDrawerOpen;
+								}}
 								aria-label={showDesktopDiffDrawer ? 'Hide diff' : 'Show diff'}
 								aria-pressed={showDesktopDiffDrawer}
 							>
@@ -3481,18 +3530,22 @@
 							</button>
 						{/if}
 
-						{#if selectedEditorHref}
-							<a
-								class={toolbarLinkClass}
-								href={selectedEditorHref}
-								target="_blank"
-								rel="noreferrer"
-								aria-label="Open current thread project in editor"
+						{#if selectedProjectPath}
+							<button
+								type="button"
+								class={`${toolbarLinkClass} ${showDesktopFileDrawer ? 'border-accent text-accent' : ''}`}
+								onclick={() => {
+									diffDrawerOpen = false;
+									fileDrawerOpen = !fileDrawerOpen;
+								}}
+								aria-label={showDesktopFileDrawer ? 'Hide files' : 'Show files'}
+								aria-pressed={showDesktopFileDrawer}
 							>
-								<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
-								<span>Editor</span>
-							</a>
+								<FileCodeIcon size={15} />
+								<span>Files</span>
+							</button>
 						{/if}
+
 					{/if}
 				</div>
 			</div>
@@ -3516,6 +3569,30 @@
 					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
 						<p class="text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
 							{loadingThreadDiffDrawer ? 'Loading diff...' : 'Diff unavailable'}
+						</p>
+					</div>
+				</aside>
+			{/if}
+		{/if}
+
+		{#if showDesktopFileDrawer}
+			{#if threadFileDrawerComponent}
+				{@const ThreadFileDrawerComponent = threadFileDrawerComponent}
+				<ThreadFileDrawerComponent
+					projectPath={selectedProjectPath}
+					editorHref={selectedEditorHref}
+					onclose={() => {
+						fileDrawerOpen = false;
+					}}
+				/>
+			{:else}
+				<aside
+					class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					aria-label="Thread files"
+				>
+					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
+						<p class="text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
+							{loadingThreadFileDrawer ? 'Loading files...' : 'Files unavailable'}
 						</p>
 					</div>
 				</aside>
