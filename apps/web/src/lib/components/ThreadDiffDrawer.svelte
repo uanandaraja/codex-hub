@@ -180,8 +180,8 @@
 	class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
 	aria-label="Thread diff"
 >
-	<div class="flex min-h-[4.75rem] items-center justify-between gap-3 rounded-none border-b border-line px-[1.1rem]">
-		<div class="flex min-w-0 items-center gap-2">
+	<div class="flex min-h-[3.6rem] items-center justify-between gap-2 rounded-none border-b border-line px-3">
+		<div class="flex min-w-0 items-center gap-1.5">
 			<GitDiffIcon size={16} class="text-muted" />
 			<h2 class="truncate text-[0.82rem] font-medium uppercase tracking-[0.12em] text-fg">Diff</h2>
 		</div>
@@ -190,7 +190,7 @@
 			{#if totalFileCount > 0}
 				<button
 					type="button"
-					class="inline-flex h-9 items-center justify-center gap-2 rounded-none border-0 bg-transparent px-2 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
+					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
 					onclick={toggleAllFiles}
 				>
 					{#if allFilesCollapsed}
@@ -204,7 +204,7 @@
 
 			{#if editorHref}
 				<a
-					class="inline-flex h-9 items-center justify-center gap-2 rounded-none border-0 bg-transparent px-2 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
+					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
 					href={editorHref}
 					target="_blank"
 					rel="noreferrer"
@@ -217,7 +217,7 @@
 
 			<button
 				type="button"
-				class="inline-flex h-10 w-10 items-center justify-center rounded-none border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
+				class="inline-flex h-8 w-8 items-center justify-center rounded-none border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
 				onclick={onclose}
 				aria-label="Close diff"
 			>

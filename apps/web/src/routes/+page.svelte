@@ -187,6 +187,10 @@ type ThreadFileDrawerProps = {
 	let threadFileDrawerComponentPromise: Promise<Component<ThreadFileDrawerProps>> | null = null;
 	let liveTurnDiffsByThread = $state<Record<string, { turnId: string | null; diff: string }>>({});
 	const conversationBottomThresholdPx = 56;
+	const desktopDiffDrawerWidthClass = 'min-[821px]:pr-[min(42vw,44rem)]';
+	const desktopFileDrawerWidthClass = 'min-[821px]:pr-[min(56vw,64rem)]';
+	const desktopDiffDrawerShellWidthClass = 'w-[min(42vw,44rem)]';
+	const desktopFileDrawerShellWidthClass = 'w-[min(56vw,64rem)]';
 
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
@@ -338,6 +342,13 @@ type ThreadFileDrawerProps = {
 	const showDesktopDiffDrawer = $derived.by(() => diffDrawerOpen && selectedThreadId !== null);
 	const showDesktopFileDrawer = $derived.by(() => fileDrawerOpen && selectedProjectPath !== null);
 	const showDesktopRightDrawer = $derived.by(() => showDesktopDiffDrawer || showDesktopFileDrawer);
+	const desktopRightDrawerPaddingClass = $derived.by(() =>
+		showDesktopFileDrawer
+			? desktopFileDrawerWidthClass
+			: showDesktopDiffDrawer
+				? desktopDiffDrawerWidthClass
+				: ''
+	);
 	const selectedComposerDraftKey = $derived.by(() =>
 		selectedThreadId
 			? `thread:${selectedThreadId}`
@@ -3494,10 +3505,10 @@ type ThreadFileDrawerProps = {
 	/>
 
 	<main
-		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''} ${showDesktopRightDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
+		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''} ${desktopRightDrawerPaddingClass}`}
 	>
 		<div
-			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${showDesktopRightDrawer ? 'min-[1180px]:pr-[min(42vw,44rem)]' : ''}`}
+			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${desktopRightDrawerPaddingClass}`}
 		>
 			<div class="flex w-full items-center justify-between gap-3">
 				<div class="min-w-0">
@@ -3563,7 +3574,7 @@ type ThreadFileDrawerProps = {
 				/>
 			{:else}
 				<aside
-					class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					class={`absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block ${desktopDiffDrawerShellWidthClass}`}
 					aria-label="Thread diff"
 				>
 					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
@@ -3587,7 +3598,7 @@ type ThreadFileDrawerProps = {
 				/>
 			{:else}
 				<aside
-					class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					class={`absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block ${desktopFileDrawerShellWidthClass}`}
 					aria-label="Thread files"
 				>
 					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">

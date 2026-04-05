@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { CaretDownIcon, CaretRightIcon, FileCodeIcon, FolderIcon } from 'phosphor-svelte';
+	import { CaretDownIcon, CaretRightIcon } from 'phosphor-svelte';
+	import OpencodeFileIcon from '$lib/components/OpencodeFileIcon.svelte';
 	import ThreadFileTree from '$lib/components/ThreadFileTree.svelte';
 	import type { DirectoryEntry } from '$lib/types';
 
@@ -55,12 +56,12 @@
 		<div class="grid gap-1">
 			<button
 				type="button"
-				class={`flex w-full items-center gap-2 border-0 px-2 py-[0.42rem] text-left transition-colors duration-150 ${
+				class={`flex w-full items-center gap-2 rounded-none border-0 px-1.5 py-[0.3rem] text-left transition-colors duration-150 ${
 					entry.path === selectedFilePath
 						? 'bg-surface-0 text-fg'
 						: 'bg-transparent text-muted hover:bg-surface-0/55 hover:text-fg'
 				}`}
-				style={`padding-left: calc(0.55rem + ${depth} * 0.8rem);`}
+				style={`padding-left: calc(0.4rem + ${depth} * 0.72rem);`}
 				onclick={() =>
 					entry.isDirectory ? void handleDirectoryClick(entry.path) : onselectfile?.(entry.path)}
 				aria-expanded={entry.isDirectory ? isExpanded(entry.path) : undefined}
@@ -73,14 +74,15 @@
 						{:else}
 							<CaretRightIcon size={12} />
 						{/if}
-					{:else}
-						<FileCodeIcon size={12} />
 					{/if}
 				</span>
 
-				{#if entry.isDirectory}
-					<FolderIcon size={12} class="shrink-0 text-muted" />
-				{/if}
+				<OpencodeFileIcon
+					path={entry.path}
+					type={entry.isDirectory ? 'directory' : 'file'}
+					expanded={entry.isDirectory ? isExpanded(entry.path) : false}
+					size={16}
+				/>
 
 				<span class="min-w-0 flex-1 truncate font-mono text-[0.72rem]">{entry.fileName}</span>
 

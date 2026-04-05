@@ -2,6 +2,7 @@
 	import type { FileContents } from '@pierre/diffs';
 	import { FileCodeIcon, SpinnerGapIcon, XIcon } from 'phosphor-svelte';
 	import vscodeLogo from '$lib/assets/vscode.svg';
+	import OpencodeFileIcon from '$lib/components/OpencodeFileIcon.svelte';
 	import ThreadFileContents from '$lib/components/ThreadFileContents.svelte';
 	import ThreadFileTree from '$lib/components/ThreadFileTree.svelte';
 	import type { DirectoryEntry, FileNode, FsNode } from '$lib/types';
@@ -37,6 +38,7 @@
 				}
 			: null
 	);
+	const filePreviewOpen = $derived.by(() => Boolean(selectedFilePath));
 
 	$effect(() => {
 		projectPath;
@@ -137,14 +139,15 @@
 		const segments = path.split('/').filter(Boolean);
 		return segments.at(-1) ?? path;
 	}
+
 </script>
 
 <aside
-	class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
+	class="absolute inset-y-0 right-0 z-[3] hidden w-[min(56vw,64rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
 	aria-label="Thread files"
 >
-	<div class="flex min-h-[4.75rem] items-center justify-between gap-3 rounded-none border-b border-line px-[1.1rem]">
-		<div class="flex min-w-0 items-center gap-2">
+	<div class="flex min-h-[3.6rem] items-center justify-between gap-2 rounded-none border-b border-line px-3">
+		<div class="flex min-w-0 items-center gap-1.5">
 			<FileCodeIcon size={16} class="text-muted" />
 			<h2 class="truncate text-[0.82rem] font-medium uppercase tracking-[0.12em] text-fg">Files</h2>
 		</div>
@@ -152,7 +155,7 @@
 		<div class="flex items-center gap-1">
 			{#if editorHref}
 				<a
-					class="inline-flex h-9 items-center justify-center gap-2 rounded-none border-0 bg-transparent px-2 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
+					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
 					href={editorHref}
 					target="_blank"
 					rel="noreferrer"
@@ -165,7 +168,7 @@
 
 			<button
 				type="button"
-				class="inline-flex h-10 w-10 items-center justify-center rounded-none border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
+				class="inline-flex h-8 w-8 items-center justify-center rounded-none border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
 				onclick={onclose}
 				aria-label="Close files"
 			>
@@ -174,18 +177,18 @@
 		</div>
 	</div>
 
-	<div class="min-h-0 flex-1 overflow-y-auto px-[1.1rem] py-[1.1rem]">
+	<div class="min-h-0 flex-1 overflow-hidden">
 		{#if projectPath}
-			<div class="grid h-full min-h-0 grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)] overflow-hidden border border-line bg-surface-0">
-				<div class="min-h-0 overflow-y-auto border-r border-line py-3">
-					<div class="px-3 pb-3">
-						<p class="truncate font-mono text-[0.66rem] uppercase tracking-[0.12em] text-muted">
-							{projectPath}
-						</p>
-					</div>
-
+			<div
+				class={`grid h-full min-h-0 overflow-hidden rounded-none border border-line bg-surface-0 ${
+					filePreviewOpen
+						? 'grid-cols-[minmax(11rem,14rem)_minmax(0,1fr)]'
+						: 'grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]'
+				}`}
+			>
+				<div class="min-h-0 overflow-y-auto border-r border-line py-2">
 					{#if rootEntries.length > 0}
-						<div class="px-2 pb-3">
+						<div class="px-1 pb-2">
 							<ThreadFileTree
 								entries={rootEntries}
 								{expandedPaths}
@@ -207,7 +210,7 @@
 					{/if}
 				</div>
 
-				<div class="min-h-0 overflow-auto bg-surface-1">
+				<div class="min-h-0 overflow-y-auto overflow-x-hidden bg-surface-1">
 					{#if selectedFileLoading}
 						<div class="flex h-full items-center justify-center gap-2 px-6 py-8 font-mono text-[0.76rem] text-muted">
 							<SpinnerGapIcon size={14} class="animate-spin" />
@@ -219,8 +222,28 @@
 						</div>
 					{:else if selectedFileNode}
 						<div class="min-h-full">
-							<div class="border-b border-line px-4 py-3">
-								<p class="truncate font-mono text-[0.72rem] text-fg">{selectedFileNode.path}</p>
+							<div class="border-b border-line bg-surface-0">
+								<div
+									class="inline-flex max-w-full items-center gap-2 border border-line bg-surface-1 pl-3 pr-2 text-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+								>
+									<OpencodeFileIcon path={selectedFileNode.path} type="file" size={16} />
+									<div class="min-w-0 py-2">
+										<p class="truncate text-[0.86rem] font-medium tracking-[0.01em] text-fg">
+											{fileNameFromPath(selectedFileNode.path)}
+										</p>
+									</div>
+									<button
+										type="button"
+										class="ml-1 inline-flex h-7 w-7 shrink-0 items-center justify-center border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
+										onclick={() => {
+											selectedFilePath = null;
+											fileBrowserError = null;
+										}}
+										aria-label="Close file preview"
+									>
+										<XIcon size={12} />
+									</button>
+								</div>
 							</div>
 
 							{#if selectedFileNode.isBinary}
@@ -238,7 +261,7 @@
 							{/if}
 						</div>
 					{:else}
-						<div class="flex h-full items-center justify-center px-6 py-8">
+						<div class="flex h-full items-center justify-center rounded-none px-6 py-8">
 							<p class="text-center font-mono text-[0.76rem] text-muted">
 								Select a file from the tree to view its full contents.
 							</p>

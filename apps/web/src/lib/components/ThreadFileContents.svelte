@@ -21,8 +21,16 @@
 		theme: 'gruvbox-dark-medium',
 		themeType: 'dark',
 		disableFileHeader: true,
-		overflow: 'scroll',
-		disableLineNumbers: false
+		overflow: 'wrap',
+		disableLineNumbers: false,
+		unsafeCSS: `
+			pre,
+			code {
+				white-space: pre-wrap !important;
+				overflow-wrap: anywhere !important;
+				word-break: break-word !important;
+			}
+		`
 	};
 
 	onMount(() => {

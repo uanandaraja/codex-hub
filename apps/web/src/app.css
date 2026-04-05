@@ -94,7 +94,7 @@
 		--muted-foreground: var(--muted-fg);
 		--accent-foreground: var(--accent-fg);
 		--destructive: var(--danger);
-		--radius: 8px;
+		--radius: 0px;
 		--page-glow-accent: oklch(0.828 0.189 84.429 / 0.12);
 		--page-glow-ambient: oklch(0.714 0.014 41.2 / 0.07);
 		--shadow-elevated-soft: 0 18px 48px rgba(0, 0, 0, 0.24);
