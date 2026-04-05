@@ -295,6 +295,7 @@ export interface DirectoryEntry {
 	isDirectory: boolean;
 	isFile: boolean;
 	path: string;
+	isIgnored?: boolean;
 }
 
 export interface DirectoryNode {

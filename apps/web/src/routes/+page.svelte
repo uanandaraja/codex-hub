@@ -73,11 +73,11 @@
 		editorHref?: string | null;
 		onclose?: () => void;
 	};
-type ThreadFileDrawerProps = {
-	projectPath?: string | null;
-	editorHref?: string | null;
-	onclose?: () => void;
-};
+	type ThreadFileDrawerProps = {
+		projectPath?: string | null;
+		editorHref?: string | null;
+		onclose?: () => void;
+	};
 
 	const PROMPT_PREFERENCES_KEY = 'codex-hub.prompt-preferences';
 	const PINNED_PROJECTS_KEY = 'codex-hub.pinned-projects';
@@ -187,11 +187,6 @@ type ThreadFileDrawerProps = {
 	let threadFileDrawerComponentPromise: Promise<Component<ThreadFileDrawerProps>> | null = null;
 	let liveTurnDiffsByThread = $state<Record<string, { turnId: string | null; diff: string }>>({});
 	const conversationBottomThresholdPx = 56;
-	const desktopDiffDrawerWidthClass = 'min-[821px]:pr-[min(42vw,44rem)]';
-	const desktopFileDrawerWidthClass = 'min-[821px]:pr-[min(56vw,64rem)]';
-	const desktopDiffDrawerShellWidthClass = 'w-[min(42vw,44rem)]';
-	const desktopFileDrawerShellWidthClass = 'w-[min(56vw,64rem)]';
-
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
 	const toolbarLinkClass =
@@ -344,9 +339,9 @@ type ThreadFileDrawerProps = {
 	const showDesktopRightDrawer = $derived.by(() => showDesktopDiffDrawer || showDesktopFileDrawer);
 	const desktopRightDrawerPaddingClass = $derived.by(() =>
 		showDesktopFileDrawer
-			? desktopFileDrawerWidthClass
+			? 'min-[821px]:pr-[min(56vw,64rem)]'
 			: showDesktopDiffDrawer
-				? desktopDiffDrawerWidthClass
+				? 'min-[821px]:pr-[min(42vw,44rem)]'
 				: ''
 	);
 	const selectedComposerDraftKey = $derived.by(() =>
@@ -3574,7 +3569,8 @@ type ThreadFileDrawerProps = {
 				/>
 			{:else}
 				<aside
-					class={`absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block ${desktopDiffDrawerShellWidthClass}`}
+					class="absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					style="width: min(42vw, 44rem);"
 					aria-label="Thread diff"
 				>
 					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
@@ -3598,7 +3594,8 @@ type ThreadFileDrawerProps = {
 				/>
 			{:else}
 				<aside
-					class={`absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block ${desktopFileDrawerShellWidthClass}`}
+					class="absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					style="width: min(56vw, 64rem);"
 					aria-label="Thread files"
 				>
 					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">

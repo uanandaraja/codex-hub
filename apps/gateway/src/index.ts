@@ -7,6 +7,7 @@ import { homedir } from "node:os";
 import { basename, extname, join, relative, resolve } from "node:path";
 import { createInterface } from "node:readline";
 import { URL } from "node:url";
+import { spawn } from "node:child_process";
 import { CodexAppServerBridge, JsonRpcError } from "./codex-app-server";
 import type {
   ApprovalPolicy,
@@ -551,11 +552,19 @@ async function handleRequest(
           "fs/readDirectory",
           { path },
         );
+        const ignoredEntryNames = await readIgnoredEntryNames(
+          path,
+          result.entries,
+        );
         const listing: DirectoryListingResponse = {
           kind: "directory",
           path,
           entries: result.entries
-            .map((entry) => ({ ...entry, path: join(path, entry.fileName) }))
+            .map((entry) => ({
+              ...entry,
+              path: join(path, entry.fileName),
+              isIgnored: ignoredEntryNames.has(entry.fileName),
+            }))
             .sort((left, right) => {
               if (left.isDirectory !== right.isDirectory) {
                 return left.isDirectory ? -1 : 1;
@@ -622,6 +631,60 @@ async function handleRequest(
   } catch (error) {
     handleError(response, error);
   }
+}
+
+async function readIgnoredEntryNames(
+  directoryPath: string,
+  entries: DirectoryEntry[],
+): Promise<Set<string>> {
+  if (entries.length === 0) {
+    return new Set();
+  }
+
+  return new Promise((resolveIgnored) => {
+    const child = spawn("git", ["check-ignore", "--stdin", "-z"], {
+      cwd: directoryPath,
+      stdio: ["pipe", "pipe", "ignore"],
+    });
+
+    let stdout = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+
+    child.on("error", () => {
+      resolveIgnored(new Set());
+    });
+
+    child.on("close", (code) => {
+      if (code !== 0 && code !== 1) {
+        resolveIgnored(new Set());
+        return;
+      }
+
+      const ignored = new Set(
+        stdout
+          .split("\0")
+          .map((value) => value.trim())
+          .filter(Boolean)
+          .map((value) => value.replace(/\/$/, "")),
+      );
+      resolveIgnored(ignored);
+    });
+
+    const stdin = child.stdin;
+    if (!stdin) {
+      resolveIgnored(new Set());
+      return;
+    }
+
+    for (const entry of entries) {
+      stdin.write(`${entry.fileName}${entry.isDirectory ? "/" : ""}\0`);
+    }
+    stdin.end();
+  });
 }
 
 function streamThreadEvents(

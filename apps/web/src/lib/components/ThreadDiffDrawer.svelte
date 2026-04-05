@@ -211,7 +211,7 @@
 					aria-label="Open current thread project in editor"
 				>
 					<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
-					<span>Editor</span>
+					<span>Open in Editor</span>
 				</a>
 			{/if}
 

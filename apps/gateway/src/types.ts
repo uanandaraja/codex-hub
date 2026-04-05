@@ -179,6 +179,7 @@ export interface DirectoryEntry {
   fileName: string;
   isDirectory: boolean;
   isFile: boolean;
+  isIgnored?: boolean;
 }
 
 export interface DirectoryListingResponse {

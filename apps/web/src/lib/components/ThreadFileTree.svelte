@@ -42,6 +42,10 @@
 		return directoryEntriesByPath[path] ?? [];
 	}
 
+	function isDotEntry(fileName: string): boolean {
+		return fileName.startsWith('.');
+	}
+
 	async function handleDirectoryClick(path: string): Promise<void> {
 		if (!isExpanded(path) && childEntries(path).length === 0) {
 			await onloaddirectory?.(path);
@@ -53,13 +57,18 @@
 
 <div class="grid gap-1">
 	{#each entries as entry (entry.path)}
+		{@const isDimmed = Boolean(entry.isIgnored) || isDotEntry(entry.fileName)}
 		<div class="grid gap-1">
 			<button
 				type="button"
-				class={`flex w-full items-center gap-2 rounded-none border-0 px-1.5 py-[0.3rem] text-left transition-colors duration-150 ${
+				class={`flex w-full items-center gap-2 rounded-none border-0 px-1.5 py-[0.3rem] text-left transition-[background,color,opacity] duration-150 ${
 					entry.path === selectedFilePath
-						? 'bg-surface-0 text-fg'
-						: 'bg-transparent text-muted hover:bg-surface-0/55 hover:text-fg'
+						? isDimmed
+							? 'bg-surface-0 text-muted opacity-70'
+							: 'bg-surface-0 text-fg'
+						: isDimmed
+							? 'bg-transparent text-muted opacity-55 hover:bg-surface-0/55 hover:text-fg hover:opacity-80'
+							: 'bg-transparent text-muted hover:bg-surface-0/55 hover:text-fg'
 				}`}
 				style={`padding-left: calc(0.4rem + ${depth} * 0.72rem);`}
 				onclick={() =>
@@ -67,7 +76,7 @@
 				aria-expanded={entry.isDirectory ? isExpanded(entry.path) : undefined}
 				aria-current={!entry.isDirectory && entry.path === selectedFilePath ? 'true' : undefined}
 			>
-				<span class="inline-flex h-4 w-4 shrink-0 items-center justify-center text-muted">
+				<span class={`inline-flex h-4 w-4 shrink-0 items-center justify-center ${isDimmed ? 'text-muted/70' : 'text-muted'}`}>
 					{#if entry.isDirectory}
 						{#if isExpanded(entry.path)}
 							<CaretDownIcon size={12} />
@@ -82,6 +91,7 @@
 					type={entry.isDirectory ? 'directory' : 'file'}
 					expanded={entry.isDirectory ? isExpanded(entry.path) : false}
 					size={16}
+					iconClass={isDimmed ? 'opacity-60' : ''}
 				/>
 
 				<span class="min-w-0 flex-1 truncate font-mono text-[0.72rem]">{entry.fileName}</span>
