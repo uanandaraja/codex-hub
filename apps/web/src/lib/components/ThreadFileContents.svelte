@@ -96,6 +96,8 @@
 <style>
 	.thread-file-contents {
 		display: block;
+		height: 100%;
+		min-height: 100%;
 		min-width: 0;
 		max-width: 100%;
 		overflow: hidden;

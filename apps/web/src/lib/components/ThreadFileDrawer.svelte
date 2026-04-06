@@ -190,7 +190,7 @@
 							<p class="font-mono text-[0.76rem] text-notice">{fileBrowserError}</p>
 						</div>
 					{:else if selectedFileNode}
-						<div class="min-h-full">
+						<div class="flex h-full min-h-0 flex-col">
 							<div class="border-b border-line bg-surface-0">
 								<div
 									class="inline-flex max-w-full items-center gap-2 border border-line bg-surface-1 pl-3 pr-2 text-fg shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
@@ -216,15 +216,17 @@
 							</div>
 
 							{#if selectedFileNode.isBinary}
-								<div class="px-6 py-8">
+								<div class="flex-1 px-6 py-8">
 									<p class="font-mono text-[0.76rem] text-muted">
 										Binary file, {selectedFileNode.byteLength} bytes.
 									</p>
 								</div>
 							{:else if selectedPierreFile}
-								<ThreadFileContents file={selectedPierreFile} />
+								<div class="min-h-0 flex-1">
+									<ThreadFileContents file={selectedPierreFile} />
+								</div>
 							{:else}
-								<div class="px-6 py-8">
+								<div class="flex-1 px-6 py-8">
 									<p class="font-mono text-[0.76rem] text-muted">Could not render this file.</p>
 								</div>
 							{/if}
