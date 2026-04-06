@@ -59,7 +59,7 @@
 	} = $props();
 
 	const closeButtonClass =
-		'inline-flex h-11 w-11 items-center justify-center border-0 bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
+		'inline-flex h-8 w-8 items-center justify-center border-0 bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
 	const projectRowClass =
 		'group flex w-full min-w-0 items-center gap-1 border-0 border-l-2 border-l-transparent bg-transparent pl-[0.45rem] text-fg transition-[background-color,border-color] duration-150';
 	const projectExpandButtonClass =
@@ -97,7 +97,7 @@
 	class={`fixed inset-y-0 left-0 z-40 flex w-[16.75rem] max-w-[calc(100vw-2.5rem)] min-w-0 flex-col overflow-hidden rounded-none border-r border-line bg-surface-1 transition-transform duration-200 ease-out ${open ? 'translate-x-0' : '-translate-x-full'}`}
 >
 	<div
-		class="flex min-h-[4.9rem] min-w-0 items-center justify-between gap-3 rounded-none border-b border-line px-[1.1rem] py-[1.05rem]"
+		class="flex min-h-[3.55rem] min-w-0 items-center justify-between gap-1.5 rounded-none border-b border-line px-[0.75rem] py-[0.55rem]"
 	>
 		<button
 			type="button"
@@ -105,14 +105,14 @@
 			onclick={onhome}
 			aria-label="Go to home"
 		>
-			<h1 class="truncate text-[0.95rem] font-medium uppercase tracking-[0.12em] text-muted">
+			<h1 class="truncate text-[0.72rem] font-medium uppercase tracking-[0.16em] text-muted">
 				Codex Hub
 			</h1>
 		</button>
 
-		<div class="flex shrink-0 items-center gap-2">
+		<div class="flex shrink-0 items-center gap-1">
 			<button class={closeButtonClass} type="button" onclick={onclose} aria-label="Hide sidebar">
-				<XIcon size={18} />
+				<XIcon size={14} />
 			</button>
 		</div>
 	</div>

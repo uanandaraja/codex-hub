@@ -1739,6 +1739,14 @@
 	}
 
 	function shortPath(value: string): string {
+		if (/^\/home\/[^/]+(?:\/|$)/.test(value)) {
+			return value.replace(/^\/home\/[^/]+/, '~');
+		}
+
+		if (/^\/Users\/[^/]+(?:\/|$)/.test(value)) {
+			return value.replace(/^\/Users\/[^/]+/, '~');
+		}
+
 		const root = status?.projectsRoot ?? '';
 		if (root && value.startsWith(root)) {
 			const relative = value.slice(root.length).replace(/^\/+/, '');
@@ -3613,38 +3621,35 @@
 			onscroll={handleConversationScroll}
 		>
 			<div
-				class={`mx-auto flex min-h-full w-full flex-col ${showHomeScreen ? 'max-w-[720px]' : 'max-w-[680px]'}`}
+				class="mx-auto flex min-h-full w-full max-w-[680px] flex-col"
 			>
 				{#if showHomeScreen}
-					<div
-						class="flex flex-1 flex-col items-center justify-center px-3 py-10 text-center min-[821px]:py-16"
-					>
-						<h2 class="text-[clamp(1.4rem,4vw,2rem)] font-medium tracking-[-0.04em] text-fg">
-							Codex Hub
-						</h2>
-						<div class="mt-10 w-full rounded-none border-t border-line">
-							{#each homeProjects as project (project.path)}
-								<div
-									class="group flex items-center gap-3 rounded-none border-b border-line py-4 text-left transition-colors duration-150 hover:bg-surface-1/35"
-								>
-									<button
-										type="button"
-										class="min-w-0 flex-1 cursor-pointer rounded-none border-0 bg-transparent p-0 text-left"
-										onclick={() => void handleProjectSelect(project.path)}
-									>
-										<p
-											class="truncate text-[0.95rem] font-normal tracking-[-0.03em] text-fg transition-colors duration-150 group-hover:text-accent"
+					<div class="flex flex-1 flex-col justify-center px-3 py-10 min-[821px]:py-16">
+						<div class="w-full">
+							<h2
+								class="text-left text-[clamp(1.5rem,3.6vw,2.35rem)] font-medium tracking-[-0.05em] text-fg"
+							>
+								Codex Hub
+							</h2>
+							<div class="mt-8 overflow-x-auto pb-2">
+								<div class="flex min-w-max gap-3">
+									{#each homeProjects as project (project.path)}
+										<button
+											type="button"
+											class="w-[12.5rem] shrink-0 border border-line bg-surface-1 px-4 py-4 text-left transition-[border-color,background-color] duration-150 hover:border-accent/60 hover:bg-surface-1/90 focus-visible:border-accent focus-visible:outline-none"
+											onclick={() => void handleProjectSelect(project.path)}
+											aria-label={`Open ${project.name}`}
 										>
-											{project.name}
-										</p>
-										<p
-											class="truncate font-mono text-[0.72rem] text-muted transition-colors duration-150 group-hover:text-fg/72"
-										>
-											{shortPath(project.path)}
-										</p>
-									</button>
+											<p class="truncate text-[0.95rem] font-medium tracking-[-0.03em] text-fg">
+												{project.name}
+											</p>
+											<p class="mt-2 break-all font-mono text-[0.72rem] text-muted">
+												{shortPath(project.path)}
+											</p>
+										</button>
+									{/each}
 								</div>
-							{/each}
+							</div>
 						</div>
 					</div>
 				{:else if !selectedProjectPath}
