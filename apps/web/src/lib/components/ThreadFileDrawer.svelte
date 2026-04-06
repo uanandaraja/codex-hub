@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { FileContents } from '@pierre/diffs';
-	import { FileCodeIcon, SpinnerGapIcon, XIcon } from 'phosphor-svelte';
+	import { SpinnerGapIcon, XIcon } from 'phosphor-svelte';
 	import vscodeLogo from '$lib/assets/vscode.svg';
 	import OpencodeFileIcon from '$lib/components/OpencodeFileIcon.svelte';
 	import ThreadFileContents from '$lib/components/ThreadFileContents.svelte';
@@ -143,40 +143,9 @@
 </script>
 
 <aside
-	class="absolute inset-y-0 right-0 z-[3] hidden w-[min(56vw,64rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
+	class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden w-[min(56vw,64rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
 	aria-label="Thread files"
 >
-	<div class="flex min-h-[3.6rem] items-center justify-between gap-2 rounded-none border-b border-line px-3">
-		<div class="flex min-w-0 items-center gap-1.5">
-			<FileCodeIcon size={16} class="text-muted" />
-			<h2 class="truncate text-[0.82rem] font-medium uppercase tracking-[0.12em] text-fg">Files</h2>
-		</div>
-
-		<div class="flex items-center gap-1">
-			{#if editorHref}
-				<a
-					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
-					href={editorHref}
-					target="_blank"
-					rel="noreferrer"
-					aria-label="Open current thread project in editor"
-				>
-					<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
-					<span>Open in Editor</span>
-				</a>
-			{/if}
-
-			<button
-				type="button"
-				class="inline-flex h-8 w-8 items-center justify-center rounded-none border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
-				onclick={onclose}
-				aria-label="Close files"
-			>
-				<XIcon size={18} />
-			</button>
-		</div>
-	</div>
-
 	<div class="min-h-0 flex-1 overflow-hidden">
 		{#if projectPath}
 			<div
@@ -262,9 +231,23 @@
 						</div>
 					{:else}
 						<div class="flex h-full items-center justify-center rounded-none px-6 py-8">
-							<p class="text-center font-mono text-[0.76rem] text-muted">
-								Select a file from the tree to view its full contents.
-							</p>
+							<div class="flex flex-col items-center gap-4">
+								<p class="text-center font-mono text-[0.76rem] text-muted">
+									Select a file from the tree to view its full contents.
+								</p>
+								{#if editorHref}
+									<a
+										class="inline-flex h-9 items-center justify-center gap-2 border border-line bg-surface-1 px-3 font-mono text-[0.72rem] uppercase tracking-[0.12em] text-fg transition-[background-color,color,border-color] duration-150 hover:border-accent hover:bg-surface-0 hover:text-accent"
+										href={editorHref}
+										target="_blank"
+										rel="noreferrer"
+										aria-label="Open current thread project in editor"
+									>
+										<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
+										<span>Open in Editor</span>
+									</a>
+								{/if}
+							</div>
 						</div>
 					{/if}
 				</div>

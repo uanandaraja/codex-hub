@@ -162,7 +162,7 @@
 	let turnElapsedSeconds = $state<Record<string, number>>({});
 	let conversationBody = $state<HTMLElement | null>(null);
 	let sidebarOpen = $state(false);
-	let isDesktopViewport = false;
+	let isDesktopViewport = $state(false);
 	let desktopSidebarPreference: boolean | null = null;
 	let hasMounted = false;
 	let optimisticTurnCounter = 0;
@@ -189,12 +189,14 @@
 	const conversationBottomThresholdPx = 56;
 	const iconButtonClass =
 		'inline-flex h-11 w-11 items-center justify-center border border-line bg-transparent text-fg transition-[background,border-color,color] duration-150 hover:border-accent hover:text-accent disabled:cursor-default disabled:opacity-[0.45]';
-	const toolbarLinkClass =
-		'pointer-events-auto hidden h-11 items-center gap-2 border border-line bg-surface-1/88 px-4 text-[0.86rem] font-medium tracking-[0.02em] text-fg backdrop-blur-sm transition-[background,color] duration-150 hover:bg-surface-1 hover:text-accent min-[821px]:inline-flex';
+	const headerIconButtonClass =
+		'inline-flex h-7 w-7 items-center justify-center border-0 bg-transparent text-fg transition-[background-color,color] duration-150 hover:bg-accent-soft-hover hover:text-fg disabled:cursor-default disabled:opacity-[0.45]';
 	const currentProject = $derived.by<ProjectSummary | null>(
 		() => projects.find((project) => project.path === selectedProjectPath) ?? null
 	);
+	const isRootRoute = $derived.by(() => selectedProjectPath === null);
 	const showHomeScreen = $derived.by(() => !selectedProjectPath && projects.length > 0);
+	const showMainHeader = $derived.by(() => isDesktopViewport && !isRootRoute);
 	const homeProjects = $derived.by<ProjectSummary[]>(() =>
 		[...projects]
 			.sort((left, right) => {
@@ -246,6 +248,7 @@
 	const selectedThreadLabel = $derived.by(() =>
 		selectedThreadSummary ? chatLabel(selectedThreadSummary) : 'loading chat'
 	);
+	const mainHeaderLabel = $derived.by(() => currentProject?.name ?? 'Codex Hub');
 	const selectedThreadBranch = $derived.by(() =>
 		readGitBranch(currentThread?.gitInfo ?? selectedThreadSummary?.gitInfo ?? null)
 	);
@@ -339,9 +342,9 @@
 	const showDesktopRightDrawer = $derived.by(() => showDesktopDiffDrawer || showDesktopFileDrawer);
 	const desktopRightDrawerPaddingClass = $derived.by(() =>
 		showDesktopFileDrawer
-			? 'min-[821px]:pr-[min(56vw,64rem)]'
+			? 'min-[821px]:mr-[min(56vw,64rem)]'
 			: showDesktopDiffDrawer
-				? 'min-[821px]:pr-[min(42vw,44rem)]'
+				? 'min-[821px]:mr-[min(42vw,44rem)]'
 				: ''
 	);
 	const selectedComposerDraftKey = $derived.by(() =>
@@ -3508,62 +3511,84 @@
 	/>
 
 	<main
-		class={`relative grid h-full min-h-0 min-w-0 grid-rows-[minmax(0,1fr)_auto] overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''} ${desktopRightDrawerPaddingClass}`}
+		class={`relative grid h-full min-h-0 min-w-0 ${showMainHeader ? 'grid-rows-[auto_minmax(0,1fr)_auto]' : 'grid-rows-[minmax(0,1fr)_auto]'} overflow-hidden bg-surface-0 transition-[padding] duration-200 ${sidebarOpen ? 'min-[821px]:pl-[16.75rem]' : ''}`}
 	>
-		<div
-			class={`pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem] ${desktopRightDrawerPaddingClass}`}
-		>
-			<div class="flex w-full items-center justify-between gap-3">
-				<div class="min-w-0">
-					<button
-						class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
-						type="button"
-						onclick={toggleSidebar}
-						aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
-						aria-expanded={sidebarOpen}
-					>
-						<ListIcon size={18} />
-					</button>
-				</div>
+		{#if showMainHeader}
+			<header class="border-b border-line px-[0.95rem]">
+				<div class="flex min-h-[3rem] w-full items-center justify-between gap-3">
+					<div class="flex min-w-0 items-center gap-3">
+						<button
+							class={`${headerIconButtonClass} ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
+							type="button"
+							onclick={toggleSidebar}
+							aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
+							aria-expanded={sidebarOpen}
+						>
+							<ListIcon size={14} />
+						</button>
+						<p class="truncate text-[0.8rem] font-medium tracking-[-0.02em] text-muted">
+							{mainHeaderLabel}
+						</p>
+					</div>
 
-				<div class="flex items-center justify-end gap-2">
-					{#if !showDesktopRightDrawer}
+					<div class="flex items-center justify-end gap-2">
 						{#if selectedThreadId}
 							<button
 								type="button"
-								class={`${toolbarLinkClass} ${showDesktopDiffDrawer ? 'border-accent text-accent' : ''}`}
+								class={`${headerIconButtonClass} ${showDesktopDiffDrawer ? 'bg-accent-soft text-accent' : ''}`}
 								onclick={() => {
+									const nextOpen = !diffDrawerOpen;
 									fileDrawerOpen = false;
-									diffDrawerOpen = !diffDrawerOpen;
+									diffDrawerOpen = nextOpen;
+									if (nextOpen) {
+										sidebarOpen = false;
+									}
 								}}
 								aria-label={showDesktopDiffDrawer ? 'Hide diff' : 'Show diff'}
 								aria-pressed={showDesktopDiffDrawer}
 							>
-								<GitDiffIcon size={15} />
-								<span>Diff</span>
+								<GitDiffIcon size={14} />
 							</button>
 						{/if}
 
 						{#if selectedProjectPath}
 							<button
 								type="button"
-								class={`${toolbarLinkClass} ${showDesktopFileDrawer ? 'border-accent text-accent' : ''}`}
+								class={`${headerIconButtonClass} ${showDesktopFileDrawer ? 'bg-accent-soft text-accent' : ''}`}
 								onclick={() => {
+									const nextOpen = !fileDrawerOpen;
 									diffDrawerOpen = false;
-									fileDrawerOpen = !fileDrawerOpen;
+									fileDrawerOpen = nextOpen;
+									if (nextOpen) {
+										sidebarOpen = false;
+									}
 								}}
 								aria-label={showDesktopFileDrawer ? 'Hide files' : 'Show files'}
 								aria-pressed={showDesktopFileDrawer}
 							>
-								<FileCodeIcon size={15} />
-								<span>Files</span>
+								<FileCodeIcon size={14} />
 							</button>
 						{/if}
-
-					{/if}
+					</div>
+				</div>
+			</header>
+		{:else}
+			<div class="pointer-events-none absolute inset-x-0 top-0 z-[2] px-[1.1rem] pt-[1.1rem]">
+				<div class="flex w-full items-start justify-between gap-3">
+					<div class="min-w-0">
+						<button
+							class={`${iconButtonClass} pointer-events-auto bg-surface-1/88 backdrop-blur-sm ${sidebarOpen ? 'min-[821px]:hidden' : ''}`}
+							type="button"
+							onclick={toggleSidebar}
+							aria-label={sidebarOpen ? 'Toggle sidebar' : 'Show sidebar'}
+							aria-expanded={sidebarOpen}
+						>
+							<ListIcon size={18} />
+						</button>
+					</div>
 				</div>
 			</div>
-		</div>
+		{/if}
 
 		{#if showDesktopDiffDrawer}
 			{#if threadDiffDrawerComponent}
@@ -3577,11 +3602,11 @@
 				/>
 			{:else}
 				<aside
-					class="absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
 					style="width: min(42vw, 44rem);"
 					aria-label="Thread diff"
 				>
-					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
+					<div class="px-[1.1rem] py-[1.1rem] text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
 						<p class="text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
 							{loadingThreadDiffDrawer ? 'Loading diff...' : 'Diff unavailable'}
 						</p>
@@ -3602,11 +3627,11 @@
 				/>
 			{:else}
 				<aside
-					class="absolute inset-y-0 right-0 z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
+					class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
 					style="width: min(56vw, 64rem);"
 					aria-label="Thread files"
 				>
-					<div class="flex min-h-[4.75rem] items-center border-b border-line px-[1.1rem]">
+					<div class="px-[1.1rem] py-[1.1rem] text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
 						<p class="text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">
 							{loadingThreadFileDrawer ? 'Loading files...' : 'Files unavailable'}
 						</p>
@@ -3616,13 +3641,11 @@
 		{/if}
 
 		<section
-			class="min-h-0 overflow-x-hidden overflow-y-auto px-[1.1rem] pt-[5rem] pb-8 min-[821px]:pt-8"
+			class={`min-h-0 overflow-x-hidden overflow-y-auto px-[1.1rem] pb-8 ${showMainHeader ? 'pt-8' : 'pt-[5rem] min-[821px]:pt-8'} ${desktopRightDrawerPaddingClass}`}
 			bind:this={conversationBody}
 			onscroll={handleConversationScroll}
 		>
-			<div
-				class="mx-auto flex min-h-full w-full max-w-[680px] flex-col"
-			>
+			<div class="mx-auto flex min-h-full w-full max-w-[680px] flex-col">
 				{#if showHomeScreen}
 					<div class="flex flex-1 flex-col justify-center px-3 py-10 min-[821px]:py-16">
 						<div class="w-full">
@@ -3743,7 +3766,7 @@
 			</div>
 		</section>
 
-		<footer class="relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4">
+		<footer class={`relative z-[1] bg-transparent px-[1.1rem] pt-4 pb-4 ${desktopRightDrawerPaddingClass}`}>
 			<div
 				class="theme-bg-footer-fade pointer-events-none absolute inset-x-0 top-0 h-20 backdrop-blur-[10px]"
 			></div>

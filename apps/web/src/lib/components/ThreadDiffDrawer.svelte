@@ -1,8 +1,7 @@
 <script lang="ts">
-	import { CaretDownIcon, CaretRightIcon, GitDiffIcon, XIcon } from 'phosphor-svelte';
+	import { CaretDownIcon, CaretRightIcon } from 'phosphor-svelte';
 	import { parsePatchFiles } from '@pierre/diffs';
 	import type { FileDiffMetadata } from '@pierre/diffs';
-	import vscodeLogo from '$lib/assets/vscode.svg';
 	import ThreadDiffFile from '$lib/components/ThreadDiffFile.svelte';
 
 	type DiffPatch = {
@@ -177,17 +176,12 @@
 </script>
 
 <aside
-	class="absolute inset-y-0 right-0 z-[3] hidden w-[min(42vw,44rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
+	class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden w-[min(42vw,44rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
 	aria-label="Thread diff"
 >
-	<div class="flex min-h-[3.6rem] items-center justify-between gap-2 rounded-none border-b border-line px-3">
-		<div class="flex min-w-0 items-center gap-1.5">
-			<GitDiffIcon size={16} class="text-muted" />
-			<h2 class="truncate text-[0.82rem] font-medium uppercase tracking-[0.12em] text-fg">Diff</h2>
-		</div>
-
-		<div class="flex items-center gap-1">
-			{#if totalFileCount > 0}
+	<div class="min-h-0 flex-1 overflow-y-auto px-[1.1rem] py-[1.1rem]">
+		{#if totalFileCount > 0}
+			<div class="mb-4 flex justify-end">
 				<button
 					type="button"
 					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
@@ -200,33 +194,9 @@
 					{/if}
 					{allFilesCollapsed ? 'Expand all' : 'Collapse all'}
 				</button>
-			{/if}
+			</div>
+		{/if}
 
-			{#if editorHref}
-				<a
-					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
-					href={editorHref}
-					target="_blank"
-					rel="noreferrer"
-					aria-label="Open current thread project in editor"
-				>
-					<img class="h-4 w-4 shrink-0" src={vscodeLogo} alt="" />
-					<span>Open in Editor</span>
-				</a>
-			{/if}
-
-			<button
-				type="button"
-				class="inline-flex h-8 w-8 items-center justify-center rounded-none border-0 bg-transparent text-muted transition-colors duration-150 hover:text-fg"
-				onclick={onclose}
-				aria-label="Close diff"
-			>
-				<XIcon size={18} />
-			</button>
-		</div>
-	</div>
-
-	<div class="min-h-0 flex-1 overflow-y-auto px-[1.1rem] py-[1.1rem]">
 		{#if totalFileCount > 0}
 			<div class="grid gap-6 pb-8">
 				{#each parsedSections as section (section.id)}
