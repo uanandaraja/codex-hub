@@ -55,13 +55,13 @@
 	}
 </script>
 
-<div class="grid gap-1">
+<div class="min-w-0 grid gap-1">
 	{#each entries as entry (entry.path)}
 		{@const isDimmed = Boolean(entry.isIgnored) || isDotEntry(entry.fileName)}
-		<div class="grid gap-1">
+		<div class="min-w-0 grid gap-1">
 			<button
 				type="button"
-				class={`flex w-full items-center gap-2 rounded-none border-0 px-1.5 py-[0.3rem] text-left transition-[background,color,opacity] duration-150 ${
+				class={`flex min-w-0 w-full items-center gap-2 overflow-hidden rounded-none border-0 px-1.5 py-[0.3rem] text-left transition-[background,color,opacity] duration-150 ${
 					entry.path === selectedFilePath
 						? isDimmed
 							? 'bg-surface-0 text-muted opacity-70'

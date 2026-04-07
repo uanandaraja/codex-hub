@@ -38,6 +38,7 @@
 	},
 	"dependencies": {
 		"@fontsource-variable/geist": "^5.2.8",
+		"@fontsource-variable/geist-mono": "^5.2.7",
 		"@pierre/diffs": "^1.1.10",
 		"bits-ui": "^2.16.4",
 		"phosphor-svelte": "^3.1.0",

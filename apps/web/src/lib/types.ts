@@ -163,6 +163,12 @@ export interface ProjectListResponse {
 	data: ProjectSummary[];
 }
 
+export interface GitDiffResponse {
+	data: {
+		patch: string;
+	};
+}
+
 export interface ModelReasoningEffortOption {
 	reasoningEffort: 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 	description: string;

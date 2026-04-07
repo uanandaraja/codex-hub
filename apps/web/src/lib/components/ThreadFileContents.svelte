@@ -95,12 +95,15 @@
 
 <style>
 	.thread-file-contents {
+		--diffs-font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo,
+			monospace;
+		--diffs-header-font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular,
+			Menlo, monospace;
 		display: block;
-		height: 100%;
 		min-height: 100%;
 		min-width: 0;
 		max-width: 100%;
-		overflow: hidden;
+		overflow: visible;
 		width: 100%;
 	}
 </style>

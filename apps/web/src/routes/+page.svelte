@@ -19,6 +19,7 @@
 		CodexThread,
 		CodexTurn,
 		CodexThreadItem,
+		GitDiffResponse,
 		GatewayStatus,
 		ModelSummary,
 		PendingServerRequest,
@@ -181,6 +182,8 @@
 	let threadDiffDrawerComponent = $state<Component<ThreadDiffDrawerProps> | null>(null);
 	let loadingThreadDiffDrawer = $state(false);
 	let threadDiffDrawerComponentPromise: Promise<Component<ThreadDiffDrawerProps>> | null = null;
+	let projectDiffPatchesByPath = $state<Record<string, ThreadDiffPatch[]>>({});
+	let loadingProjectDiffsByPath = $state<Record<string, true>>({});
 	let fileDrawerOpen = $state(false);
 	let threadFileDrawerComponent = $state<Component<ThreadFileDrawerProps> | null>(null);
 	let loadingThreadFileDrawer = $state(false);
@@ -307,8 +310,8 @@
 	const selectedLiveTurnDiff = $derived.by(() =>
 		selectedThreadId ? (liveTurnDiffsByThread[selectedThreadId] ?? null) : null
 	);
-	const selectedThreadHistoryDiffPatches = $derived.by<ThreadDiffPatch[]>(() =>
-		currentThread ? collectThreadDiffPatches(currentThread, selectedProjectPath) : []
+	const selectedProjectDiffPatches = $derived.by<ThreadDiffPatch[]>(() =>
+		selectedProjectPath ? (projectDiffPatchesByPath[selectedProjectPath] ?? []) : []
 	);
 	const selectedThreadDiffSections = $derived.by<ThreadDiffSection[]>(() => {
 		const sections: ThreadDiffSection[] = [];
@@ -317,7 +320,7 @@
 		if (liveDiff) {
 			sections.push({
 				id: 'live',
-				title: selectedThreadHistoryDiffPatches.length > 0 ? 'Current' : null,
+				title: selectedProjectDiffPatches.length > 0 ? 'Current' : null,
 				patches: [
 					{
 						id: `live:${selectedThreadId ?? 'thread'}:${selectedLiveTurnDiff?.turnId ?? 'turn'}`,
@@ -327,11 +330,11 @@
 			});
 		}
 
-		if (selectedThreadHistoryDiffPatches.length > 0) {
+		if (selectedProjectDiffPatches.length > 0) {
 			sections.push({
-				id: 'history',
-				title: liveDiff ? 'Changes' : null,
-				patches: selectedThreadHistoryDiffPatches
+				id: 'unstaged',
+				title: liveDiff ? 'Unstaged' : null,
+				patches: selectedProjectDiffPatches
 			});
 		}
 
@@ -344,7 +347,7 @@
 		showDesktopFileDrawer
 			? 'min-[821px]:mr-[min(56vw,64rem)]'
 			: showDesktopDiffDrawer
-				? 'min-[821px]:mr-[min(42vw,44rem)]'
+				? 'min-[821px]:mr-[min(56vw,64rem)]'
 				: ''
 	);
 	const selectedComposerDraftKey = $derived.by(() =>
@@ -376,6 +379,14 @@
 		}
 
 		void ensureThreadDiffDrawerComponent();
+	});
+
+	$effect(() => {
+		if (!showDesktopDiffDrawer || !selectedProjectPath || loadingProjectDiffsByPath[selectedProjectPath]) {
+			return;
+		}
+
+		void fetchProjectDiff(selectedProjectPath);
 	});
 
 	$effect(() => {
@@ -3237,6 +3248,41 @@
 		}
 	}
 
+	async function fetchProjectDiff(projectPath: string): Promise<void> {
+		loadingProjectDiffsByPath = {
+			...loadingProjectDiffsByPath,
+			[projectPath]: true
+		};
+
+		try {
+			const result = await api<GitDiffResponse>(
+				`/api/git-diff?projectPath=${encodeURIComponent(projectPath)}`
+			);
+			const patch = result.data.patch.trim();
+			projectDiffPatchesByPath = {
+				...projectDiffPatchesByPath,
+				[projectPath]: patch
+					? [
+							{
+								id: `${projectPath}:unstaged`,
+								patch: patch.endsWith('\n') ? patch : `${patch}\n`
+							}
+						]
+					: []
+			};
+		} catch (error) {
+			projectDiffPatchesByPath = {
+				...projectDiffPatchesByPath,
+				[projectPath]: []
+			};
+			banner = error instanceof Error ? error.message : 'Failed to load git diff.';
+		} finally {
+			const next = { ...loadingProjectDiffsByPath };
+			delete next[projectPath];
+			loadingProjectDiffsByPath = next;
+		}
+	}
+
 	async function ensureThreadFileDrawerComponent(): Promise<void> {
 		loadingThreadFileDrawer = true;
 		threadFileDrawerComponentPromise ??= import('$lib/components/ThreadFileDrawer.svelte').then(
@@ -3391,102 +3437,6 @@
 		);
 	}
 
-	function collectThreadDiffPatches(
-		thread: CodexThread,
-		projectRoot: string | null
-	): ThreadDiffPatch[] {
-		const patches: ThreadDiffPatch[] = [];
-
-		for (let turnIndex = thread.turns.length - 1; turnIndex >= 0; turnIndex -= 1) {
-			const turn = thread.turns[turnIndex];
-			for (let itemIndex = turn.items.length - 1; itemIndex >= 0; itemIndex -= 1) {
-				const item = turn.items[itemIndex];
-				if (!isFileChangeItem(item)) {
-					continue;
-				}
-
-				for (let changeIndex = item.changes.length - 1; changeIndex >= 0; changeIndex -= 1) {
-					const patch = buildSyntheticFilePatch(item.changes[changeIndex], projectRoot);
-					if (!patch) {
-						continue;
-					}
-
-					patches.push({
-						id: `${turn.id}:${item.id}:${changeIndex}`,
-						patch
-					});
-				}
-			}
-		}
-
-		return patches;
-	}
-
-	function buildSyntheticFilePatch(
-		change: Extract<CodexThreadItem, { type: 'fileChange' }>['changes'][number],
-		projectRoot: string | null
-	): string | null {
-		const rawDiff = change.diff?.trim();
-		if (!rawDiff) {
-			return null;
-		}
-
-		if (hasPatchHeader(rawDiff)) {
-			return rawDiff.endsWith('\n') ? rawDiff : `${rawDiff}\n`;
-		}
-
-		const currentPath = toPatchPath(change.path, projectRoot);
-		const movedPath = change.kind.move_path
-			? toPatchPath(change.kind.move_path, projectRoot)
-			: null;
-		const diffBody = rawDiff.endsWith('\n') ? rawDiff : `${rawDiff}\n`;
-
-		switch (change.kind.type) {
-			case 'add':
-				return [
-					`diff --git a/${currentPath} b/${currentPath}`,
-					'new file mode 100644',
-					'--- /dev/null',
-					`+++ b/${currentPath}`,
-					diffBody
-				].join('\n');
-			case 'delete':
-				return [
-					`diff --git a/${currentPath} b/${currentPath}`,
-					'deleted file mode 100644',
-					`--- a/${currentPath}`,
-					'+++ /dev/null',
-					diffBody
-				].join('\n');
-			case 'update':
-			default: {
-				const nextPath = movedPath ?? currentPath;
-				return [
-					`diff --git a/${currentPath} b/${nextPath}`,
-					`--- a/${currentPath}`,
-					`+++ b/${nextPath}`,
-					diffBody
-				].join('\n');
-			}
-		}
-	}
-
-	function hasPatchHeader(diff: string): boolean {
-		const normalized = diff.trimStart();
-		return (
-			normalized.startsWith('diff --git') ||
-			(normalized.startsWith('--- ') && normalized.includes('\n+++ '))
-		);
-	}
-
-	function toPatchPath(path: string, projectRoot: string | null): string {
-		if (projectRoot && path.startsWith(projectRoot)) {
-			const relativePath = path.slice(projectRoot.length).replace(/^\/+/, '');
-			return relativePath || projectNameFromPath(projectRoot);
-		}
-
-		return path.replace(/^\/+/, '');
-	}
 </script>
 
 <svelte:head>
@@ -3603,7 +3553,7 @@
 			{:else}
 				<aside
 					class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden rounded-none border-l border-line bg-surface-1 min-[821px]:block"
-					style="width: min(42vw, 44rem);"
+					style="width: min(56vw, 64rem);"
 					aria-label="Thread diff"
 				>
 					<div class="px-[1.1rem] py-[1.1rem] text-[0.82rem] font-medium uppercase tracking-[0.12em] text-muted">

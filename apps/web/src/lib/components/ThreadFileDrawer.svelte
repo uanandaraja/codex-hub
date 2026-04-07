@@ -155,9 +155,9 @@
 						: 'grid-cols-[minmax(14rem,18rem)_minmax(0,1fr)]'
 				}`}
 			>
-				<div class="min-h-0 overflow-y-auto border-r border-line py-2">
+				<div class="min-h-0 min-w-0 overflow-x-hidden overflow-y-auto border-r border-line py-2">
 					{#if rootEntries.length > 0}
-						<div class="px-1 pb-2">
+						<div class="min-w-0 px-1 pb-2">
 							<ThreadFileTree
 								entries={rootEntries}
 								{expandedPaths}

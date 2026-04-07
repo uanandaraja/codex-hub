@@ -39,8 +39,9 @@
 		onclose?: () => void;
 	} = $props();
 
-	let defaultFilesCollapsed = $state(true);
+	let defaultFilesCollapsed = $state(false);
 	let fileCollapseOverrides = $state<Record<string, boolean>>({});
+	let diffStyle = $state<'unified' | 'split'>('split');
 
 	const parsedPatchCache = new Map<
 		string,
@@ -176,12 +177,35 @@
 </script>
 
 <aside
-	class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden w-[min(42vw,44rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
+	class="absolute right-0 bottom-0 top-[3rem] z-[3] hidden w-[min(56vw,64rem)] rounded-none flex-col border-l border-line bg-surface-1 min-[821px]:flex"
 	aria-label="Thread diff"
 >
 	<div class="min-h-0 flex-1 overflow-y-auto px-[1.1rem] py-[1.1rem]">
 		{#if totalFileCount > 0}
-			<div class="mb-4 flex justify-end">
+			<div class="mb-4 flex items-center justify-between gap-3">
+				<div class="inline-flex items-center border border-line bg-surface-0 p-0.5">
+					<button
+						type="button"
+						class={`inline-flex h-7 items-center justify-center px-2.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] transition-[background-color,color] duration-150 ${diffStyle === 'unified' ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-accent-soft-hover hover:text-fg'}`}
+						onclick={() => {
+							diffStyle = 'unified';
+						}}
+						aria-pressed={diffStyle === 'unified'}
+					>
+						Stacked
+					</button>
+					<button
+						type="button"
+						class={`inline-flex h-7 items-center justify-center px-2.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] transition-[background-color,color] duration-150 ${diffStyle === 'split' ? 'bg-accent-soft text-accent' : 'text-muted hover:bg-accent-soft-hover hover:text-fg'}`}
+						onclick={() => {
+							diffStyle = 'split';
+						}}
+						aria-pressed={diffStyle === 'split'}
+					>
+						Side by Side
+					</button>
+				</div>
+
 				<button
 					type="button"
 					class="inline-flex h-8 items-center justify-center gap-1.5 rounded-none border-0 bg-transparent px-1.5 font-mono text-[0.68rem] uppercase tracking-[0.12em] text-muted transition-colors duration-150 hover:text-fg"
@@ -236,7 +260,7 @@
 
 									{#if !fileIsCollapsed(file.id)}
 										<div class="border-t border-line">
-											<ThreadDiffFile fileDiff={file.fileDiff} />
+											<ThreadDiffFile fileDiff={file.fileDiff} {diffStyle} />
 										</div>
 									{/if}
 								</div>

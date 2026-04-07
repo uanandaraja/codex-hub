@@ -12,23 +12,13 @@
 
 	let diffsModulePromise: Promise<DiffsModule> | null = null;
 
-	let { fileDiff }: { fileDiff: FileDiffMetadata } = $props();
+	let {
+		fileDiff,
+		diffStyle = 'unified'
+	}: { fileDiff: FileDiffMetadata; diffStyle?: 'unified' | 'split' } = $props();
 
 	let container = $state<HTMLDivElement | null>(null);
 	let instance = $state<FileDiffInstanceLike | null>(null);
-
-	const options: FileDiffOptions<undefined> = {
-		theme: 'gruvbox-dark-medium',
-		themeType: 'dark',
-		diffStyle: 'unified',
-		diffIndicators: 'none',
-		disableFileHeader: true,
-		overflow: 'wrap',
-		lineDiffType: 'word',
-		hunkSeparators: 'simple',
-		collapsedContextThreshold: 10,
-		expansionLineCount: 12
-	};
 
 	onMount(() => {
 		let cancelled = false;
@@ -47,7 +37,7 @@
 				return;
 			}
 
-			const nextInstance = new module.FileDiff(options, undefined, true);
+			const nextInstance = new module.FileDiff(buildOptions(diffStyle), undefined, true);
 			nextInstance.hydrate({
 				fileDiff,
 				fileContainer: container
@@ -63,10 +53,27 @@
 			return;
 		}
 
+		instance.setOptions(buildOptions(diffStyle));
 		instance.render({
-			fileDiff: currentFileDiff
+			fileDiff: currentFileDiff,
+			forceRender: true
 		});
 	});
+
+	function buildOptions(diffStyle: 'unified' | 'split'): FileDiffOptions<undefined> {
+		return {
+			theme: 'gruvbox-dark-medium',
+			themeType: 'dark',
+			diffStyle,
+			diffIndicators: 'bars',
+			disableFileHeader: true,
+			overflow: 'wrap',
+			lineDiffType: 'word',
+			hunkSeparators: 'simple',
+			collapsedContextThreshold: 10,
+			expansionLineCount: 12
+		};
+	}
 
 	function loadDiffsModule(): Promise<DiffsModule> {
 		diffsModulePromise ??= import('@pierre/diffs');
@@ -92,6 +99,10 @@
 
 <style>
 	.thread-diff-file {
+		--diffs-font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo,
+			monospace;
+		--diffs-header-font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular,
+			Menlo, monospace;
 		display: block;
 		min-width: 0;
 		max-width: 100%;
